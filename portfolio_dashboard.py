@@ -1455,6 +1455,15 @@ def render_margin_variability_insights(portfolio_metrics, project_margin_metrics
         
         health_status = "Excellent" if health_score >= 80 else "Good" if health_score >= 60 else "Concerning" if health_score >= 40 else "Critical"
         
+        
+        total_impact = portfolio_metrics['total_cm2_erosion_value']
+        if total_impact < 0:
+            impact_text = f"{format_currency_millions(abs(total_impact))} margin erosion"
+            impact_color = "red"
+        else:
+            impact_text = f"{format_currency_millions(total_impact)} margin improvement"
+            impact_color = "green"
+
         st.markdown(f"""
         <div class="exec-summary">
             <h4>📊 Portfolio Margin Health Assessment</h4>
@@ -1463,15 +1472,26 @@ def render_margin_variability_insights(portfolio_metrics, project_margin_metrics
                 <li><strong>Projects at Risk:</strong> {severely_declining} with severe margin decline</li>
                 <li><strong>Volatile Margins:</strong> {high_volatility} projects with high volatility</li>
                 <li><strong>Forecast Issues:</strong> {unreliable_forecasts} projects with unreliable forecasts</li>
-                <li><strong>Portfolio Impact:</strong> {format_currency_millions(portfolio_metrics['total_cm2_erosion_value'])} margin erosion</li>
+                <li><strong>Portfolio Impact:</strong> <span style="color: {impact_color}">{impact_text}</span></li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
+
     
     with col2:
         # Strategic recommendations based on margin patterns
         recommendations = []
         
+        if total_impact > 0:
+            recommendations.extend([
+                "✅ **Portfolio Improvement:** Net margin gain of " + format_currency_millions(total_impact),
+                "📈 **Momentum Building:** Continue current margin management practices"
+        ])
+        # Remove the severe decline recommendation if overall is positive
+        if severely_declining > 0:
+            recommendations[0] = f"⚠️ **Mixed Performance:** Despite {severely_declining} declining project(s), portfolio shows net improvement"
+
+
         # Risk-based recommendations
         if severely_declining > 0:
             recommendations.extend([
