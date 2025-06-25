@@ -1313,6 +1313,29 @@ def render_enhanced_margin_analysis(portfolio_data):
     else:
         st.warning("No margin data available for display.")
 
+
+def debug_value_impact_calculation(project_id, cm2_as_sold, cm2_fct_n, cm2_total_erosion, 
+                                  selling_price_fct_n, cm2_erosion_value, contract_value):
+    """Debug function to trace value impact calculations"""
+    print("\n" + "="*80)
+    print(f"DEBUG: Value Impact Calculation for Project {project_id}")
+    print("="*80)
+    print(f"Input Values:")
+    print(f"  - CM2 AS SOLD:        {cm2_as_sold:.2f}%")
+    print(f"  - CM2 FCT(n):         {cm2_fct_n:.2f}%")
+    print(f"  - CM2 Total Erosion:  {cm2_total_erosion:+.2f}pp (FCT(n) - AS SOLD)")
+    print(f"  - Selling Price FCT(n): CHF {selling_price_fct_n:,.0f}")
+    print(f"  - Contract Value:      CHF {contract_value:,.0f}")
+    print(f"\nCalculation:")
+    print(f"  Value Impact = (Total Erosion / 100) × Selling Price FCT(n)")
+    print(f"  Value Impact = ({cm2_total_erosion:+.2f} / 100) × {selling_price_fct_n:,.0f}")
+    print(f"  Value Impact = {cm2_total_erosion/100:+.4f} × {selling_price_fct_n:,.0f}")
+    print(f"  Value Impact = CHF {cm2_erosion_value:,.0f}")
+    print(f"\nResult:")
+    print(f"  - Value Impact: CHF {cm2_erosion_value:,.0f} ({cm2_erosion_value/1000:.0f}K)")
+    print(f"  - Direction: {'Improvement' if cm2_erosion_value > 0 else 'Erosion' if cm2_erosion_value < 0 else 'No Change'}")
+    print("="*80 + "\n")
+
 # FIX #3: Enhanced CM Variability Analysis
 def calculate_margin_variability_metrics(project_data):
     """Calculate comprehensive margin variability metrics for a project"""
@@ -1321,7 +1344,7 @@ def calculate_margin_variability_metrics(project_data):
     cost_analysis = project_data.get('cost_analysis', {})
     contract_value = safe_get_value(project_data, 'revenues', 'Contract Price', 'n_ptd')
     
-    # CM2 across periods - now properly extracted from template
+    # CM2 across periods
     cm2_as_sold = cost_analysis.get('cm2_pct_as_sold', 0)
     cm2_fct_n1 = cost_analysis.get('cm2_pct_fct_n1', 0) 
     cm2_fct_n = cost_analysis.get('cm2_pct_fct_n', 0)
@@ -1331,10 +1354,9 @@ def calculate_margin_variability_metrics(project_data):
     cm1_fct_n1 = cost_analysis.get('cm1_pct_fct_n1', 0)
     cm1_fct_n = cost_analysis.get('cm1_pct_fct_n', 0)
     
-    # CM2 values
-    cm2_value_as_sold = cost_analysis.get('cm2_value_as_sold', 0)
-    cm2_value_fct_n1 = cost_analysis.get('cm2_value_fct_n1', 0)
-    cm2_value_fct_n = cost_analysis.get('cm2_value_fct_n', 0)
+    # Get selling prices for value calculations
+    selling_price_as_sold = cost_analysis.get('selling_price_as_sold', contract_value)
+    selling_price_fct_n = cost_analysis.get('selling_price_fct_n', contract_value)
     
     # Check if we have any historical data at all
     has_historical_data = False
@@ -1352,27 +1374,52 @@ def calculate_margin_variability_metrics(project_data):
             'message': 'No historical margin data found for variability analysis'
         }
     
+    # Calculate total erosion/improvement (in percentage points)
+    cm2_total_erosion = cm2_fct_n - cm2_as_sold  # Positive = improvement, Negative = erosion
+    cm1_total_erosion = cm1_fct_n - cm1_as_sold
+    
+    # SIMPLIFIED: Calculate value impact by multiplying total variance by contract value
+    # Use the current contract value (selling price FCT n) as the base
+    # Total erosion is already in percentage points, so divide by 100 to get the factor
+    cm2_erosion_value = (cm2_total_erosion / 100) * selling_price_fct_n
+    cm1_erosion_value = (cm1_total_erosion / 100) * selling_price_fct_n
+    
+    # DEBUG: Enable/disable debug output
+    DEBUG_VALUE_IMPACT = True  # Set to False to disable debug output
+    if DEBUG_VALUE_IMPACT:
+        # Try to get project ID from project_data
+        project_id = project_data.get('project_info', {}).get('Project No.', 'Unknown')
+        debug_value_impact_calculation(
+            project_id=project_id,
+            cm2_as_sold=cm2_as_sold,
+            cm2_fct_n=cm2_fct_n,
+            cm2_total_erosion=cm2_total_erosion,
+            selling_price_fct_n=selling_price_fct_n,
+            cm2_erosion_value=cm2_erosion_value,
+            contract_value=contract_value
+        )
+    
     return {
         # CM2 Variability Metrics
-        'cm2_total_erosion': cm2_fct_n - cm2_as_sold,  # Total margin change from baseline
-        'cm2_recent_change': cm2_fct_n - cm2_fct_n1,   # Recent margin change
-        'cm2_forecast_accuracy': abs(cm2_fct_n1 - cm2_fct_n) if cm2_fct_n1 != 0 else 0,  # Forecast stability
+        'cm2_total_erosion': cm2_total_erosion,  # Total margin change from baseline (pp)
+        'cm2_recent_change': cm2_fct_n - cm2_fct_n1,   # Recent margin change (pp)
+        'cm2_forecast_accuracy': abs(cm2_fct_n1 - cm2_fct_n) if cm2_fct_n1 != 0 else 0,
         'cm2_volatility_index': calculate_volatility_index([cm2_as_sold, cm2_fct_n1, cm2_fct_n]),
         
         # CM1 Variability Metrics  
-        'cm1_total_erosion': cm1_fct_n - cm1_as_sold,
+        'cm1_total_erosion': cm1_total_erosion,
         'cm1_recent_change': cm1_fct_n - cm1_fct_n1,
         'cm1_forecast_accuracy': abs(cm1_fct_n1 - cm1_fct_n) if cm1_fct_n1 != 0 else 0,
         'cm1_volatility_index': calculate_volatility_index([cm1_as_sold, cm1_fct_n1, cm1_fct_n]),
         
         # Margin Stability Assessment
         'margin_trend': assess_margin_trend(cm2_as_sold, cm2_fct_n1, cm2_fct_n),
-        'margin_risk_level': assess_margin_risk(cm2_fct_n, cm2_fct_n - cm2_as_sold),
+        'margin_risk_level': assess_margin_risk(cm2_fct_n, cm2_total_erosion),
         'forecast_reliability': assess_forecast_reliability(cm2_fct_n1, cm2_fct_n, cm1_fct_n1, cm1_fct_n),
         
         # Value Impact (absolute CHF impact)
-        'cm2_erosion_value': (cm2_value_fct_n - cm2_value_as_sold) if cm2_value_as_sold != 0 else (cm2_fct_n - cm2_as_sold) / 100 * contract_value,
-        'cm1_erosion_value': (cm1_fct_n - cm1_as_sold) / 100 * contract_value if contract_value > 0 else 0,
+        'cm2_erosion_value': cm2_erosion_value,
+        'cm1_erosion_value': cm1_erosion_value,
         
         # Current margin values for display
         'cm2_current': cm2_fct_n,
@@ -1383,7 +1430,11 @@ def calculate_margin_variability_metrics(project_data):
         'cm2_as_sold': cm2_as_sold,
         'cm2_fct_n1': cm2_fct_n1,
         'cm1_as_sold': cm1_as_sold,
-        'cm1_fct_n1': cm1_fct_n1
+        'cm1_fct_n1': cm1_fct_n1,
+        
+        # Debug info
+        'selling_price_as_sold': selling_price_as_sold,
+        'selling_price_fct_n': selling_price_fct_n
     }
 
 def calculate_volatility_index(margin_values):
@@ -1481,29 +1532,8 @@ def render_margin_variability_analysis(portfolio_data):
     """Render comprehensive margin variability analysis dashboard"""
     st.markdown("## 📊 Contribution Margin Variability Analysis")
     
-    # Debug information
-    debug_mode = st.checkbox("Show Debug Information", value=False, key="margin_variability_debug")
-    
-    if debug_mode:
-        st.markdown("### 🔍 Debug: Project Data Summary")
-        for project_id, project in portfolio_data.items():
-            cost_analysis = project['data'].get('cost_analysis', {})
-            st.write(f"**Project {project_id}:**")
-            st.write(f"  - CM2% AS: {cost_analysis.get('cm2_pct_as_sold', 0):.2f}")
-            st.write(f"  - CM2% FCT(n): {cost_analysis.get('cm2_pct_fct_n', 0):.2f}")
-            st.write(f"  - CM2% FCT(n-1): {cost_analysis.get('cm2_pct_fct_n1', 0):.2f}")
-            st.write(f"  - CM1% AS: {cost_analysis.get('cm1_pct_as_sold', 0):.2f}")
-            st.write(f"  - CM1% FCT(n): {cost_analysis.get('cm1_pct_fct_n', 0):.2f}")
-            st.write(f"  - CM1% FCT(n-1): {cost_analysis.get('cm1_pct_fct_n1', 0):.2f}")
-            st.write(f"  - EC AS: {cost_analysis.get('ec_total_as_sold', 0):,.0f}")
-            st.write(f"  - EC FCT(n): {cost_analysis.get('ec_total_fct_n', 0):,.0f}")
-            st.write(f"  - EC FCT(n-1): {cost_analysis.get('ec_total_fct_n1', 0):,.0f}")
-            st.write(f"  - IC AS: {cost_analysis.get('ic_total_as_sold', 0):,.0f}")
-            st.write(f"  - IC FCT(n): {cost_analysis.get('ic_total_fct_n', 0):,.0f}")
-            st.write(f"  - IC FCT(n-1): {cost_analysis.get('ic_total_fct_n1', 0):,.0f}")
-            st.write(f"  - Selling Price AS: {cost_analysis.get('selling_price_as_sold', 0):,.0f}")
-            st.write(f"  - Selling Price FCT(n): {cost_analysis.get('selling_price_fct_n', 0):,.0f}")
-            st.write(f"  - Selling Price FCT(n-1): {cost_analysis.get('selling_price_fct_n1', 0):,.0f}")
+    # Add debug toggle
+    debug_mode = st.checkbox("🔍 Show Value Impact Debug Information", value=False, key="margin_debug")
     
     # Process all projects for margin variability
     project_margin_metrics = {}
@@ -1528,6 +1558,26 @@ def render_margin_variability_analysis(portfolio_data):
                     'name': project['name'],
                     'metrics': metrics
                 }
+                
+                # Debug display for this project if enabled
+                if debug_mode:
+                    with st.expander(f"Debug: {project_id} - {project['name']}", expanded=False):
+                        st.markdown("**Value Impact Calculation Debug:**")
+                        st.code(f"""
+Project: {project_id}
+CM2 AS SOLD: {metrics['cm2_as_sold']:.2f}%
+CM2 FCT(n): {metrics['cm2_current']:.2f}%
+CM2 Total Erosion: {metrics['cm2_total_erosion']:+.2f}pp
+
+Selling Price FCT(n): CHF {metrics['selling_price_fct_n']:,.0f}
+
+Calculation:
+Value Impact = (Total Erosion / 100) × Selling Price FCT(n)
+Value Impact = ({metrics['cm2_total_erosion']:+.2f} / 100) × {metrics['selling_price_fct_n']:,.0f}
+Value Impact = CHF {metrics['cm2_erosion_value']:,.0f} ({metrics['cm2_erosion_value']/1000:.0f}K)
+
+Direction: {'Improvement' if metrics['cm2_erosion_value'] > 0 else 'Erosion' if metrics['cm2_erosion_value'] < 0 else 'No Change'}
+                        """)
                 
                 # Aggregate portfolio metrics
                 portfolio_metrics['projects_with_data'] += 1
@@ -1581,10 +1631,6 @@ def render_margin_variability_analysis(portfolio_data):
         reliability_icon = "🟢" if forecast_reliability_pct > 80 else "🟡" if forecast_reliability_pct > 60 else "🔴"
         st.metric("Forecast Reliability", f"{forecast_reliability_pct:.0f}%", f"{reliability_icon}")
     
-#    with col4:
-#        st.metric("Total Margin Impact", format_currency_millions(portfolio_metrics['total_cm2_erosion_value']))
-    
-
     with col4:
         total_impact = portfolio_metrics['total_cm2_erosion_value']
         if total_impact > 0:
@@ -1594,8 +1640,6 @@ def render_margin_variability_analysis(portfolio_data):
             impact_icon = "🔴"
             impact_text = f"Erosion"
         st.metric("Total Margin Impact", format_currency_millions(total_impact), f"{impact_icon} {impact_text}")
-
-
 
     with col5:
         risk_pct = (portfolio_metrics['margin_risk_projects'] / portfolio_metrics['projects_with_data'] * 100)
@@ -1620,7 +1664,7 @@ def render_margin_variability_analysis(portfolio_data):
             'Project': project_id,
             'Name': data['name'][:25] + "..." if len(data['name']) > 25 else data['name'],
             'CM2 Evolution': period_breakdown,
-            'Total Variance': f"{metrics['cm2_total_erosion']:+.1f}pp",
+            'Total Erosion': f"{metrics['cm2_total_erosion']:+.1f}pp",
             'Recent Change': f"{metrics['cm2_recent_change']:+.1f}pp", 
             'Volatility': f"{metrics['cm2_volatility_index']:.1f}pp",
             'Trend': metrics['margin_trend'],
