@@ -235,6 +235,21 @@ def calculate_poc_velocity(poc_current, poc_previous):
     except (ValueError, TypeError):
         return 0
 
+
+def get_threshold_summary():
+    """Get a summary of active thresholds for display"""
+    return {
+        "CM2 Status Ranges": f"🟢 ≥{EXECUTIVE_THRESHOLDS['cm2_margin']['excellent']}% | 🟢 ≥{EXECUTIVE_THRESHOLDS['cm2_margin']['good']}% | 🟡 ≥{EXECUTIVE_THRESHOLDS['cm2_margin']['warning']}% | 🔴 <{EXECUTIVE_THRESHOLDS['cm2_margin']['warning']}%"
+    }
+
+# Then in the sidebar, add:
+with st.sidebar.expander("📊 Custom Threshold Ranges", expanded=False):
+    threshold_summary = get_threshold_summary()
+    for metric, ranges in threshold_summary.items():
+        st.markdown(f"**{metric}:**")
+        st.markdown(f"<small>{ranges}</small>", unsafe_allow_html=True)
+        st.markdown("")
+
 def calculate_period_variance(current_value, previous_value):
     """Calculate period-over-period variance with proper handling of edge cases"""
     try:
@@ -296,24 +311,44 @@ def calculate_earned_value_metrics(project_data):
             'cost_efficiency': 0, 'schedule_efficiency': 0
         }
 
-def get_overall_project_status(cm2_class, committed_class, poc_class):
-    """Determine overall project status based on key metrics"""
+def get_overall_project_status(cm2_class, committed_class, poc_class, poc_current=None, poc_velocity=None):
+    """
+    Determine overall project status based on key metrics with maturity consideration
+    
+    Parameters:
+    - cm2_class: Status class for CM2 margin
+    - committed_class: Status class for committed ratio
+    - poc_class: Status class for POC velocity (raw, without maturity adjustment)
+    - poc_current: Current POC percentage (optional, for maturity adjustment)
+    - poc_velocity: Current POC velocity (optional, for maturity adjustment)
+    """
     status_scores = {
         'excellent': 4, 'good': 3, 'warning': 2, 'critical': 1
     }
     
-    avg_score = (status_scores.get(cm2_class, 1) + 
-                status_scores.get(committed_class, 1) + 
-                status_scores.get(poc_class, 1)) / 3
+    # Get base scores
+    cm2_score = status_scores.get(cm2_class, 1)
+    committed_score = status_scores.get(committed_class, 1)
+    poc_score = status_scores.get(poc_class, 1)
+    
+    # Adjust POC velocity score based on project maturity if data is available
+    if poc_current is not None and poc_velocity is not None:
+        # Recalculate POC status with maturity consideration
+        _, _, adjusted_poc_class = get_poc_velocity_status_with_maturity(poc_velocity, poc_current)
+        poc_score = status_scores.get(adjusted_poc_class, poc_score)
+    
+    # Calculate average with adjusted scores
+    avg_score = (cm2_score + committed_score + poc_score) / 3
     
     if avg_score >= 3.5:
         return "🟢 Excellent"
     elif avg_score >= 2.5:
-        return "🟡 Good"
+        return "🟢 Good"  # Changed from yellow to green for clarity
     elif avg_score >= 1.5:
         return "🟠 Warning"
     else:
         return "🔴 Critical"
+
 
 def calculate_project_health_score(cpi, spi, cm2_pct, poc_velocity=None):
     """
@@ -375,6 +410,44 @@ def calculate_project_health_score(cpi, spi, cm2_pct, poc_velocity=None):
     # Ensure final score is between 0-100
     return min(max(health_score, 0), 100)
 
+
+def calculate_expected_poc_velocity(poc_current):
+    """
+    Calculate expected POC velocity based on project maturity
+    Returns expected velocity in percentage points per month
+    """
+    if poc_current >= 95:
+        return 1.0  # 1% per month is fine for nearly complete projects
+    elif poc_current >= 90:
+        return 2.0  # 2% per month expected
+    elif poc_current >= 80:
+        return 3.0  # 3% per month expected  
+    elif poc_current >= 60:
+        return 5.0  # 5% per month expected
+    elif poc_current >= 40:
+        return 7.0  # 7% per month expected
+    else:
+        return 10.0  # 10%+ per month expected for early stage projects
+
+def get_poc_velocity_status_with_maturity(poc_velocity, poc_current):
+    """
+    Get POC velocity status considering project maturity
+    Returns icon, status text, and status class
+    """
+    expected_velocity = calculate_expected_poc_velocity(poc_current)
+    velocity_ratio = poc_velocity / expected_velocity if expected_velocity > 0 else 0
+    
+    # Determine status based on how actual velocity compares to expected
+    if velocity_ratio >= 1.2:  # 20% above expected
+        return "🟢", "Excellent", "excellent"
+    elif velocity_ratio >= 0.8:  # Within 80% of expected
+        return "🟢", "Good", "good"
+    elif velocity_ratio >= 0.5:  # Within 50% of expected
+        return "🟡", "Warning", "warning"
+    else:  # Below 50% of expected
+        return "🔴", "Critical", "critical"
+
+
 # ================================================================================
 # ENHANCED TEMPLATE PARSING FUNCTIONS
 # ================================================================================
@@ -435,23 +508,100 @@ def parse_excel_template_v24(uploaded_file):
                             project_data['revenues']['Cash In %'][period] = (cash_in / contract) * 100
                 except Exception:
                     continue
-            
+
             # Parse quarterly revenue data if exists (rows 12-16)
-            quarterly_labels = ['Q1', 'Q2', 'Q3', 'Q4', 'Total']
-            for i, quarter in enumerate(quarterly_labels, 12):
+            quarterly_row_mapping = {
+            'Q1': 12,
+            'Q2': 13,
+            'Q3': 14,
+            'Q4': 15,
+            'Total': 16
+        }
+
+            # Debug flag for quarterly parsing
+            quarterly_debug = st.checkbox("Show Quarterly Parsing Debug", value=False, key=f"quarterly_debug_{uploaded_file.name}")
+
+            for quarter, expected_row in quarterly_row_mapping.items():
                 try:
-                    if ws_revenues.cell(row=i, column=1).value:  # Check if row exists
+                    # Get the actual label from column A to verify we're reading the right row
+                    actual_label = ws_revenues.cell(row=expected_row, column=1).value
+        
+                    if quarterly_debug:
+                        st.write(f"Row {expected_row} - Expected: {quarter}, Found: {actual_label}")
+        
+                    # Check if this row contains quarterly data
+                    if actual_label and (quarter in str(actual_label) or (quarter == 'Total' and 'total' in str(actual_label).lower())):
+                        # Parse the quarterly values
+                        actuals = safe_float(ws_revenues.cell(row=expected_row, column=2).value)
+                        gap_to_close = safe_float(ws_revenues.cell(row=expected_row, column=3).value)
+                        budget = safe_float(ws_revenues.cell(row=expected_row, column=4).value)
+                        delta = safe_float(ws_revenues.cell(row=expected_row, column=5).value)
+                        delta_pct = safe_float(ws_revenues.cell(row=expected_row, column=6).value)
+            
+                        # Store the data
                         project_data['quarterly'][quarter] = {
-                            'actuals': safe_float(ws_revenues.cell(row=i, column=2).value),
-                            'gap_to_close': safe_float(ws_revenues.cell(row=i, column=3).value),
-                            'budget': safe_float(ws_revenues.cell(row=i, column=4).value),
-                            'delta': safe_float(ws_revenues.cell(row=i, column=5).value),
-                            'delta_pct': safe_float(ws_revenues.cell(row=i, column=6).value)
+                            'actuals': actuals,
+                            'gap_to_close': gap_to_close,
+                            'budget': budget,
+                            'delta': delta,
+                            'delta_pct': delta_pct
                         }
-                except Exception:
+            
+                        # Debug output for verification
+                        if quarterly_debug and quarter != 'Total':
+                            st.write(f"✅ {quarter}: Actuals={actuals:,.0f}, Gap={gap_to_close:,.0f}, Budget={budget:,.0f}, Delta%={delta_pct:.1f}%")
+                    else:
+                        # Row doesn't match expected quarter - try to find it elsewhere
+                        if quarterly_debug:
+                            st.warning(f"⚠️ {quarter} not found at row {expected_row}, searching...")
+            
+                        # Search for the quarter in nearby rows (±2 rows)
+                        found = False
+                        for offset in [-2, -1, 1, 2]:
+                            try:
+                                search_row = expected_row + offset
+                                search_label = ws_revenues.cell(row=search_row, column=1).value
+                                if search_label and quarter in str(search_label):
+                                    # Found the quarter at a different row
+                                    project_data['quarterly'][quarter] = {
+                                        'actuals': safe_float(ws_revenues.cell(row=search_row, column=2).value),
+                                        'gap_to_close': safe_float(ws_revenues.cell(row=search_row, column=3).value),
+                                        'budget': safe_float(ws_revenues.cell(row=search_row, column=4).value),
+                                        'delta': safe_float(ws_revenues.cell(row=search_row, column=5).value),
+                                        'delta_pct': safe_float(ws_revenues.cell(row=search_row, column=6).value)
+                                    }
+                                    if quarterly_debug:
+                                        st.info(f"✅ Found {quarter} at row {search_row}")
+                                    found = True
+                                    break
+                            except:
+                                continue
+            
+                        if not found:
+                            # Default to zeros if not found
+                            project_data['quarterly'][quarter] = {
+                                'actuals': 0, 'gap_to_close': 0, 'budget': 0, 'delta': 0, 'delta_pct': 0
+                            }
+                            if quarterly_debug:
+                                st.error(f"❌ {quarter} data not found - using zeros")
+                    
+                except Exception as e:
+                    if quarterly_debug:
+                        st.error(f"Error parsing {quarter}: {str(e)}")
                     project_data['quarterly'][quarter] = {
                         'actuals': 0, 'gap_to_close': 0, 'budget': 0, 'delta': 0, 'delta_pct': 0
                     }
+
+            # Validate quarterly data completeness
+            if quarterly_debug:
+                st.markdown("#### Quarterly Data Summary:")
+                for q in ['Q1', 'Q2', 'Q3', 'Q4']:
+                    q_data = project_data['quarterly'].get(q, {})
+                    if q_data['actuals'] > 0 or q_data['budget'] > 0:
+                        st.success(f"{q}: ✅ Has data")
+                    else:
+                        st.warning(f"{q}: ⚠️ No data")
+
         
         # Parse Cost Breakdown (Sheet 3) - COMPREHENSIVE WITH FIX #3
         if '3_Cost_Breakdown' in workbook.sheetnames:
@@ -738,7 +888,7 @@ def parse_excel_template_v24(uploaded_file):
         return None
 
 def assess_project_risks(project_data):
-    """Simplified project risk assessment"""
+    """Simplified project risk assessment with dynamic thresholds"""
     risk_factors = []
     
     try:
@@ -748,25 +898,39 @@ def assess_project_risks(project_data):
         committed_ratio = cost_analysis.get('committed_ratio', 0)
         cost_variance = cost_analysis.get('cost_variance_pct', 0)
         
-        # Margin risks
-        if cm2_pct < 5:
+        # Get current CM2 thresholds from EXECUTIVE_THRESHOLDS
+        cm2_excellent = EXECUTIVE_THRESHOLDS['cm2_margin']['excellent']
+        cm2_good = EXECUTIVE_THRESHOLDS['cm2_margin']['good']
+        cm2_warning = EXECUTIVE_THRESHOLDS['cm2_margin']['warning']
+        
+        # Margin risks using dynamic thresholds
+        if cm2_pct < cm2_warning:  # Below warning threshold is critical
             risk_factors.append({
                 'type': 'Margin Risk',
                 'severity': 'Critical',
-                'description': f'CM2 margin critically low at {cm2_pct:.1f}%',
+                'description': f'CM2 margin critically low at {cm2_pct:.1f}% (below warning threshold: {cm2_warning}%)',
                 'impact': 'High',
                 'recommendation': 'Immediate cost reduction and revenue optimization required'
             })
-        elif cm2_pct < 10:
+        elif cm2_pct < cm2_good:  # Between warning and good is high risk
             risk_factors.append({
                 'type': 'Margin Risk',
                 'severity': 'High',
-                'description': f'CM2 margin below target at {cm2_pct:.1f}%',
+                'description': f'CM2 margin below target at {cm2_pct:.1f}% (target: {cm2_good}%)',
                 'impact': 'Medium',
                 'recommendation': 'Review cost structure and identify optimization opportunities'
             })
+        elif cm2_pct < cm2_excellent:  # Between good and excellent is medium risk
+            risk_factors.append({
+                'type': 'Margin Risk',
+                'severity': 'Medium',
+                'description': f'CM2 margin at {cm2_pct:.1f}% - room for improvement (excellent: {cm2_excellent}%)',
+                'impact': 'Low',
+                'recommendation': 'Continue monitoring and seek margin enhancement opportunities'
+            })
+        # If cm2_pct >= cm2_excellent, no margin risk is added
         
-        # Cost commitment risks
+        # Cost commitment risks (keeping existing logic)
         if committed_ratio > 1.2:
             risk_factors.append({
                 'type': 'Cost Commitment',
@@ -784,7 +948,7 @@ def assess_project_risks(project_data):
                 'recommendation': 'Enhanced cost monitoring and approval processes'
             })
         
-        # Cost variance risks
+        # Cost variance risks (keeping existing logic)
         if cost_variance > 25:
             risk_factors.append({
                 'type': 'Cost Variance',
@@ -802,7 +966,7 @@ def assess_project_risks(project_data):
                 'recommendation': 'Detailed variance analysis and corrective action plan'
             })
         
-        # Schedule and POC risks
+        # Schedule and POC risks (keeping existing logic)
         poc_current = safe_get_value(project_data, 'revenues', 'POC%', 'n_ptd')
         poc_previous = safe_get_value(project_data, 'revenues', 'POC%', 'n1_ptd')
         poc_velocity = calculate_poc_velocity(poc_current, poc_previous)
@@ -816,7 +980,7 @@ def assess_project_risks(project_data):
                 'recommendation': 'Resource reallocation and schedule acceleration'
             })
         
-        # Cash flow risks
+        # Cash flow risks (keeping existing logic)
         quarterly_data = project_data.get('cash_flow_quarterly', {})
         if quarterly_data:
             negative_quarters = sum(1 for q in quarterly_data.values() if q['fct_n'] < 0)
@@ -830,7 +994,7 @@ def assess_project_risks(project_data):
                     'recommendation': 'Cash flow optimization and milestone acceleration'
                 })
         
-        # Revenue risks
+        # Revenue risks (keeping existing logic)
         revenue_current = safe_get_value(project_data, 'revenues', 'Revenues', 'n_ptd')
         revenue_previous = safe_get_value(project_data, 'revenues', 'Revenues', 'n1_ptd')
         revenue_variance = calculate_period_variance(revenue_current, revenue_previous)
@@ -1257,15 +1421,45 @@ def assess_margin_trend(cm2_as_sold, cm2_fct_n1, cm2_fct_n):
         return "🌊 Volatile"
 
 def assess_margin_risk(current_cm2, cm2_total_erosion):
-    """Assess margin risk level based on current margin and erosion"""
-    if current_cm2 < 5:
-        return "🔴 Critical"
-    elif current_cm2 < 10 or cm2_total_erosion < -10:
-        return "🟠 High" 
-    elif current_cm2 < 15 or cm2_total_erosion < -5:
-        return "🟡 Medium"
+    """Assess margin risk level based on current margin and erosion/improvement"""
+    
+    # Get current thresholds
+    cm2_excellent = EXECUTIVE_THRESHOLDS['cm2_margin']['excellent']
+    cm2_good = EXECUTIVE_THRESHOLDS['cm2_margin']['good']
+    cm2_warning = EXECUTIVE_THRESHOLDS['cm2_margin']['warning']
+
+    # For improving margins (positive variance)
+    if cm2_total_erosion > 2:  # Improvement of more than 2pp
+        if current_cm2 >= cm2_excellent:
+            return "🟢 Low"
+        elif current_cm2 >= cm2_good:  # Relaxed threshold for improving projects
+            return "🟢 Low"  # Good margin with positive trend
+        elif current_cm2 >= cm2_warning:
+            return "🟡 Medium"  # Acceptable margin, improving
+        else:
+            return "🔴 High"  # Low margin but improving
+    
+    # For stable margins (-2 to +2 pp change)
+    elif cm2_total_erosion >= -2:
+        if current_cm2 >= cm2_excellent:
+            return "🟢 Low"
+        elif current_cm2 >= cm2_good:
+            return "🟡 Medium"
+        elif current_cm2 >= cm2_warning:
+            return "🟠 High"
+        else:
+            return "🔴 Critical"
+    
+    # For deteriorating margins (negative erosion < -2pp)
     else:
-        return "🟢 Low"
+        if current_cm2 >= cm2_excellent and cm2_total_erosion > -5:
+            return "🟡 Medium"  # High margin but deteriorating
+        elif current_cm2 >= cm2_good and cm2_total_erosion > -5:
+            return "🟠 High"  # Good margin but deteriorating
+        elif current_cm2 >= cm2_warning and cm2_total_erosion > -10:
+            return "🟠 High"
+        else:
+            return "🔴 Critical"  # Low margin and/or severe deterioration
 
 def assess_forecast_reliability(cm2_n1, cm2_n, cm1_n1, cm1_n):
     """Assess how reliable margin forecasts are based on recent changes"""
@@ -1387,9 +1581,22 @@ def render_margin_variability_analysis(portfolio_data):
         reliability_icon = "🟢" if forecast_reliability_pct > 80 else "🟡" if forecast_reliability_pct > 60 else "🔴"
         st.metric("Forecast Reliability", f"{forecast_reliability_pct:.0f}%", f"{reliability_icon}")
     
-    with col4:
-        st.metric("Total Margin Impact", format_currency_millions(portfolio_metrics['total_cm2_erosion_value']))
+#    with col4:
+#        st.metric("Total Margin Impact", format_currency_millions(portfolio_metrics['total_cm2_erosion_value']))
     
+
+    with col4:
+        total_impact = portfolio_metrics['total_cm2_erosion_value']
+        if total_impact > 0:
+            impact_icon = "🟢"
+            impact_text = f"Improvement"
+        else:
+            impact_icon = "🔴"
+            impact_text = f"Erosion"
+        st.metric("Total Margin Impact", format_currency_millions(total_impact), f"{impact_icon} {impact_text}")
+
+
+
     with col5:
         risk_pct = (portfolio_metrics['margin_risk_projects'] / portfolio_metrics['projects_with_data'] * 100)
         risk_icon = "🔴" if risk_pct > 30 else "🟡" if risk_pct > 15 else "🟢"
@@ -1413,7 +1620,7 @@ def render_margin_variability_analysis(portfolio_data):
             'Project': project_id,
             'Name': data['name'][:25] + "..." if len(data['name']) > 25 else data['name'],
             'CM2 Evolution': period_breakdown,
-            'Total Erosion': f"{metrics['cm2_total_erosion']:+.1f}pp",
+            'Total Variance': f"{metrics['cm2_total_erosion']:+.1f}pp",
             'Recent Change': f"{metrics['cm2_recent_change']:+.1f}pp", 
             'Volatility': f"{metrics['cm2_volatility_index']:.1f}pp",
             'Trend': metrics['margin_trend'],
@@ -1535,14 +1742,21 @@ def render_margin_variability_insights(portfolio_metrics, project_margin_metrics
         """, unsafe_allow_html=True)
 
 def create_comprehensive_margin_chart(margin_projects):
-    """Create comprehensive margin analysis chart with multiple perspectives"""
+    """Create comprehensive margin analysis chart with multiple perspectives including IL/EC ratio"""
     fig = make_subplots(
         rows=2, cols=2,
-        subplot_titles=('CM1 vs CM2 Performance Matrix', 'Cost Structure by Project', 
-                       'Cost Variance vs Committed Ratio', 'Margin Distribution Analysis'),
-        specs=[[{"type": "scatter"}, {"type": "bar"}], 
-               [{"type": "scatter"}, {"type": "histogram"}]]
+        subplot_titles=('CM1 vs CM2 Performance Matrix', 'Cost Structure with IL/EC Ratio Analysis', 
+                       'Cost Variance vs Committed Ratio', 'IL/EC Ratio Distribution & Benchmarks'),
+        specs=[[{"type": "scatter"}, {"secondary_y": True}], 
+               [{"type": "scatter"}, {"type": "scatter"}]],
+        vertical_spacing=0.15,
+        horizontal_spacing=0.12
     )
+    
+    # Get current CM2 thresholds
+    cm2_excellent = EXECUTIVE_THRESHOLDS['cm2_margin']['excellent']
+    cm2_good = EXECUTIVE_THRESHOLDS['cm2_margin']['good']
+    cm2_warning = EXECUTIVE_THRESHOLDS['cm2_margin']['warning']
     
     # Extract data for charts
     project_names = [p['project_id'] for p in margin_projects]
@@ -1554,8 +1768,38 @@ def create_comprehensive_margin_chart(margin_projects):
     committed_ratios = [p['committed_ratio'] for p in margin_projects]
     cost_variances = [p['cost_variance_pct'] for p in margin_projects]
     
+    # Calculate IL/EC ratios
+    il_ec_ratios = []
+    for i in range(len(ec_values)):
+        if ec_values[i] > 0:
+            ratio = ic_values[i] / ec_values[i]
+            il_ec_ratios.append(ratio)
+        else:
+            il_ec_ratios.append(0)
+    
+    # Industry benchmarks for IL/EC ratio
+    INDUSTRY_BENCHMARKS = {
+        'engineering': {'min': 0.15, 'target': 0.25, 'max': 0.35},
+        'construction': {'min': 0.10, 'target': 0.20, 'max': 0.30},
+        'software': {'min': 0.30, 'target': 0.50, 'max': 0.70},
+        'consulting': {'min': 0.60, 'target': 0.80, 'max': 1.00},
+        'default': {'min': 0.20, 'target': 0.30, 'max': 0.40}
+    }
+    
+    # Use default benchmark
+    benchmark = INDUSTRY_BENCHMARKS['construction']
+    
     # 1. CM1 vs CM2 Performance Matrix
-    colors = ['green' if cm2 >= 10 else 'orange' if cm2 >= 5 else 'red' for cm2 in cm2_values]
+    colors = []
+    for cm2 in cm2_values:
+        if cm2 >= cm2_excellent:
+            colors.append('darkgreen')
+        elif cm2 >= cm2_good:
+            colors.append('green')
+        elif cm2 >= cm2_warning:
+            colors.append('orange')
+        else:
+            colors.append('red')
     
     fig.add_trace(go.Scatter(
         x=cm1_values,
@@ -1568,28 +1812,66 @@ def create_comprehensive_margin_chart(margin_projects):
         showlegend=False
     ), row=1, col=1)
     
-    # Add target lines
-    fig.add_hline(y=10, line_dash="dash", line_color="green", row=1, col=1)
+    # Add threshold lines for CM2
+    fig.add_hline(y=cm2_excellent, line_dash="solid", line_color="darkgreen", row=1, col=1)
+    fig.add_hline(y=cm2_good, line_dash="dash", line_color="green", row=1, col=1)
+    fig.add_hline(y=cm2_warning, line_dash="dot", line_color="orange", row=1, col=1)
     fig.add_vline(x=20, line_dash="dash", line_color="blue", row=1, col=1)
     
-    # 2. Cost Structure Comparison
+    # 2. Enhanced Cost Structure with IL/EC Ratio
     fig.add_trace(go.Bar(
         name='External Costs',
         x=project_names,
         y=ec_values,
-        marker_color='red',
-        opacity=0.7,
-        showlegend=True
+        marker_color='#FF6B6B',
+        opacity=0.8,
+        showlegend=True,
+        yaxis='y'
     ), row=1, col=2)
     
     fig.add_trace(go.Bar(
         name='Internal Costs',
         x=project_names,
         y=ic_values,
-        marker_color='blue',
-        opacity=0.7,
-        showlegend=True
+        marker_color='#4ECDC4',
+        opacity=0.8,
+        showlegend=True,
+        yaxis='y'
     ), row=1, col=2)
+    
+    # Add IL/EC ratio line with colors
+    ratio_colors = []
+    for ratio in il_ec_ratios:
+        if benchmark['min'] <= ratio <= benchmark['max']:
+            ratio_colors.append('green')
+        elif ratio < benchmark['min']:
+            ratio_colors.append('orange')
+        else:
+            ratio_colors.append('red')
+    
+    fig.add_trace(go.Scatter(
+        name='IL/EC Ratio',
+        x=project_names,
+        y=il_ec_ratios,
+        mode='lines+markers+text',
+        line=dict(color='darkblue', width=3),
+        marker=dict(size=10, color=ratio_colors),
+        text=[f"{r:.2f}" for r in il_ec_ratios],
+        textposition="top center",
+        yaxis='y2',
+        showlegend=True
+    ), row=1, col=2, secondary_y=True)
+    
+    # Add benchmark lines
+    fig.add_hline(y=benchmark['target'], line_dash="dash", line_color="green", 
+                  annotation_text=f"Target ({benchmark['target']:.2f})",
+                  annotation_position="right", secondary_y=True, row=1, col=2)
+    fig.add_hline(y=benchmark['min'], line_dash="dot", line_color="orange", 
+                  annotation_text=f"Min ({benchmark['min']:.2f})",
+                  annotation_position="right", secondary_y=True, row=1, col=2)
+    fig.add_hline(y=benchmark['max'], line_dash="dot", line_color="orange", 
+                  annotation_text=f"Max ({benchmark['max']:.2f})",
+                  annotation_position="right", secondary_y=True, row=1, col=2)
     
     # 3. Cost Variance vs Committed Ratio Risk Matrix
     risk_colors = ['green' if (cv <= 10 and cr <= 1.1) else 'orange' if (cv <= 20 and cr <= 1.2) else 'red' 
@@ -1606,39 +1888,159 @@ def create_comprehensive_margin_chart(margin_projects):
         showlegend=False
     ), row=2, col=1)
     
-    # Add risk zone lines
     fig.add_hline(y=1.1, line_dash="dash", line_color="orange", row=2, col=1)
     fig.add_vline(x=10, line_dash="dash", line_color="orange", row=2, col=1)
     
-    # 4. CM2 Distribution
-    fig.add_trace(go.Histogram(
-        x=cm2_values,
-        nbinsx=8,
-        marker_color='lightblue',
-        opacity=0.7,
-        name='CM2 Distribution',
-        showlegend=False
+    # 4. IMPROVED IL/EC Ratio Distribution Analysis
+    # Calculate statistics first
+    within_range_count = sum(1 for r in il_ec_ratios if benchmark['min'] <= r <= benchmark['max'])
+    avg_ratio = np.mean(il_ec_ratios) if il_ec_ratios else 0
+    
+    # Sort data for better visualization
+    sorted_data = sorted(zip(project_names, il_ec_ratios), key=lambda x: x[1])
+    sorted_projects = [d[0] for d in sorted_data]
+    sorted_ratios = [d[1] for d in sorted_data]
+    
+    # Determine colors for sorted data
+    sorted_colors = []
+    for ratio in sorted_ratios:
+        if benchmark['min'] <= ratio <= benchmark['max']:
+            sorted_colors.append('green')
+        elif ratio < benchmark['min']:
+            sorted_colors.append('orange')
+        else:
+            sorted_colors.append('red')
+    
+    # Create horizontal lollipop chart
+    fig.add_trace(go.Scatter(
+        x=sorted_ratios,
+        y=sorted_projects,
+        mode='markers',
+        marker=dict(
+            size=12,
+            color=sorted_colors,
+            symbol='circle',
+            line=dict(width=2, color='white')
+        ),
+        name='IL/EC Ratios',
+        showlegend=False,
+        hovertemplate='<b>%{y}</b><br>IL/EC Ratio: %{x:.2f}<extra></extra>'
     ), row=2, col=2)
     
-    fig.add_vline(x=10, line_dash="dash", line_color="green", row=2, col=2)
-    fig.add_vline(x=5, line_dash="dash", line_color="orange", row=2, col=2)
+    # Add lines from y-axis to points
+    for i, (proj, ratio) in enumerate(zip(sorted_projects, sorted_ratios)):
+        fig.add_trace(go.Scatter(
+            x=[0, ratio],
+            y=[proj, proj],
+            mode='lines',
+            line=dict(color='lightgray', width=1),
+            showlegend=False,
+            hoverinfo='skip'
+        ), row=2, col=2)
+    
+    # Add the optimal range as a shaded vertical band
+    max_x = max(max(sorted_ratios) * 1.1, benchmark['max'] * 1.2) if sorted_ratios else 1.0
+    
+    # Add background shading for different zones
+    # Below minimum (orange zone)
+    fig.add_shape(
+        type="rect",
+        x0=0, x1=benchmark['min'],
+        y0=-0.5, y1=len(sorted_projects)-0.5,
+        fillcolor="rgba(255, 200, 200, 0.2)",
+        line=dict(width=0),
+        layer="below",
+        row=2, col=2
+    )
+    
+    # Optimal range (green zone) - WITH DOTTED BORDER
+    fig.add_shape(
+        type="rect",
+        x0=benchmark['min'], x1=benchmark['max'],
+        y0=-0.5, y1=len(sorted_projects)-0.5,
+        fillcolor="rgba(200, 255, 200, 0.3)",
+        line=dict(color="darkgreen", width=2, dash="dot"),  # Changed to dotted line
+        layer="below",
+        row=2, col=2
+    )
+    
+    # Above maximum (orange zone)
+    fig.add_shape(
+        type="rect",
+        x0=benchmark['max'], x1=max_x,
+        y0=-0.5, y1=len(sorted_projects)-0.5,
+        fillcolor="rgba(255, 200, 200, 0.2)",
+        line=dict(width=0),
+        layer="below",
+        row=2, col=2
+    )
+    
+    # Add vertical reference lines
+    # TARGET LINE - THIN RED LINE
+    fig.add_vline(x=benchmark['target'], line_dash="solid", line_color="red", 
+                  line_width=1, row=2, col=2)  # Changed to red and thin (width=1)
+    
+    # Min and Max lines
+    fig.add_vline(x=benchmark['min'], line_dash="dash", line_color="darkorange", 
+                  line_width=2, row=2, col=2)
+    fig.add_vline(x=benchmark['max'], line_dash="dash", line_color="darkorange", 
+                  line_width=2, row=2, col=2)
+    
+    # Add annotations
+    fig.add_annotation(
+        x=(benchmark['min'] + benchmark['max']) / 2,
+        y=len(sorted_projects),
+        text="<b>OPTIMAL RANGE</b>",
+        showarrow=False,
+        font=dict(size=12, color="darkgreen"),
+        bgcolor="rgba(255, 255, 255, 0.8)",
+        bordercolor="darkgreen",
+        borderwidth=2,
+        xref="x4",
+        yref="y4"
+    )
+    
+    # Add summary box
+    fig.add_annotation(
+        x=0.98,
+        y=0.02,
+        xref='x4 domain',
+        yref='y4 domain',
+        text=f"<b>Summary</b><br>" +
+             f"Within Range: {within_range_count}/{len(il_ec_ratios)}<br>" +
+             f"Average: {avg_ratio:.2f}<br>" +
+             f"Target: {benchmark['target']:.2f}",
+        showarrow=False,
+        align='right',
+        font=dict(size=10),
+        bgcolor="rgba(255, 255, 255, 0.9)",
+        bordercolor="gray",
+        borderwidth=1,
+        xanchor='right',
+        yanchor='bottom'
+    )
     
     # Update layout
     fig.update_layout(
-        height=800, 
+        height=900, 
         showlegend=True, 
-        title_text="Comprehensive Portfolio Margin Analysis"
+        title_text="Comprehensive Portfolio Margin & Cost Efficiency Analysis",
+        barmode='stack'
     )
     
     # Update axes
     fig.update_xaxes(title_text="CM1 %", row=1, col=1)
     fig.update_yaxes(title_text="CM2 %", row=1, col=1)
-    fig.update_xaxes(title_text="Projects", row=1, col=2)
+    fig.update_xaxes(title_text="Projects", tickangle=-45, row=1, col=2)
     fig.update_yaxes(title_text="Costs (CHF M)", row=1, col=2)
+    fig.update_yaxes(title_text="IL/EC Ratio", secondary_y=True, row=1, col=2)
     fig.update_xaxes(title_text="Cost Variance %", row=2, col=1)
-    fig.update_yaxes(title_text="Committed Ratio", row=2, col=1)
-    fig.update_xaxes(title_text="CM2 %", row=2, col=2)
-    fig.update_yaxes(title_text="Project Count", row=2, col=2)
+    
+    # CHANGE 1: Set y-axis range for Cost Variance vs Committed Ratio
+    fig.update_yaxes(title_text="Committed Ratio", range=[0, 1.5], row=2, col=1)
+    
+    fig.update_xaxes(title_text="IL/EC Ratio", range=[0, max_x], row=2, col=2)
+    fig.update_yaxes(title_text="Projects", row=2, col=2)
     
     return fig
 
@@ -2363,6 +2765,350 @@ def render_risk_mitigation_recommendations(all_risks, risk_summary):
     for recommendation in portfolio_recommendations:
         st.info(recommendation)
 
+
+def render_portfolio_revenue_analytics(portfolio_data):
+    """Render comprehensive portfolio revenue analytics - ENHANCED VERSION"""
+    st.markdown("## 📊 Portfolio Revenue Analytics Dashboard")
+    
+    # Debug mode for data verification
+    debug_mode = st.checkbox("Show Revenue Data Debug Info", value=False, key="revenue_debug")
+    
+    # Collect and validate quarterly data
+    portfolio_quarters = {'Q1': [], 'Q2': [], 'Q3': [], 'Q4': []}
+    project_performance = []
+    projects_with_data = []
+    
+    for project_id, project in portfolio_data.items():
+        quarterly_data = project['data'].get('quarterly', {})
+        revenues_data = project['data'].get('revenues', {})
+        contract_value = safe_get_value(project['data'], 'revenues', 'Contract Price', 'n_ptd')
+        
+        if debug_mode:
+            st.write(f"**Project {project_id}:**")
+            st.write(f"- Contract Value: {contract_value:,.0f}")
+            st.write(f"- Quarterly Data Available: {bool(quarterly_data)}")
+            if quarterly_data:
+                st.json(quarterly_data)
+        
+        # Validate data exists and is meaningful
+        if quarterly_data and contract_value > 0:
+            total_actual = 0
+            total_budget = 0
+            has_valid_data = False
+            
+            for quarter in ['Q1', 'Q2', 'Q3', 'Q4']:
+                q_data = quarterly_data.get(quarter, {})
+                
+                # Try different field names based on template version
+                actual = q_data.get('actuals', 0) or q_data.get('actual', 0) or q_data.get('revenue', 0)
+                budget = q_data.get('budget', 0) or q_data.get('planned', 0)
+                
+                # If no budget, use gap_to_close + actuals as approximation
+                if budget == 0 and 'gap_to_close' in q_data:
+                    budget = actual + q_data.get('gap_to_close', 0)
+                
+                if actual > 0 or budget > 0:
+                    has_valid_data = True
+                
+                portfolio_quarters[quarter].append({
+                    'project_id': project_id,
+                    'project_name': project['name'][:25],
+                    'actual': actual,
+                    'budget': budget,
+                    'variance': q_data.get('delta_pct', 0),
+                    'contract_value': contract_value
+                })
+                
+                total_actual += actual
+                total_budget += budget
+            
+            if has_valid_data:
+                projects_with_data.append(project_id)
+                
+                # Calculate performance metric
+                if total_budget > 0:
+                    performance = (total_actual / total_budget * 100)
+                else:
+                    # Fallback: compare to contract value portion
+                    expected_revenue = contract_value * 0.25  # Assume 25% per quarter average
+                    performance = (total_actual / (expected_revenue * 4) * 100) if expected_revenue > 0 else 0
+                
+                project_performance.append({
+                    'project_id': project_id,
+                    'project_name': project['name'],
+                    'contract_value': contract_value,
+                    'total_actual': total_actual,
+                    'total_budget': total_budget if total_budget > 0 else contract_value * 0.25 * 4,
+                    'performance': performance
+                })
+    
+    if not projects_with_data:
+        st.warning("⚠️ No valid quarterly revenue data found in the uploaded files.")
+        st.info("Please ensure your Excel templates contain quarterly revenue data in the 'Project Revenues' sheet.")
+        return
+    
+    # Create visualizations with enhanced styling
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # 1. Enhanced Stacked Bar Chart
+        st.markdown("#### 📊 Quarterly Revenue Distribution by Project")
+        
+        fig1 = go.Figure()
+        
+        # Create stacked bars for each project
+        for i, quarter in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+            q_revenues = [item for item in portfolio_quarters[quarter] if item['project_id'] in projects_with_data]
+            
+            # Use different shades of blue for quarters
+            colors = ['#084594', '#2171b5', '#4292c6', '#6baed6']
+            
+            fig1.add_trace(go.Bar(
+                name=quarter,
+                x=[item['project_id'] for item in q_revenues],
+                y=[item['actual']/1000 for item in q_revenues],
+                text=[f"{item['actual']/1000:.0f}" if item['actual'] > 0 else "" for item in q_revenues],
+                textposition='inside',
+                marker_color=colors[i],
+                hovertemplate='%{x}<br>%{fullData.name}: CHF %{y:.1f}K<br>Budget: CHF %{customdata:.1f}K<extra></extra>',
+                customdata=[item['budget']/1000 for item in q_revenues]
+            ))
+        
+        fig1.update_layout(
+            barmode='stack',
+            height=450,
+            xaxis_title='Projects',
+            yaxis_title='Revenue (CHF Thousands)',
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            plot_bgcolor='rgba(0,0,0,0)',
+            bargap=0.15,
+            bargroupgap=0.1
+        )
+        
+        fig1.update_xaxes(tickangle=-45)
+        
+        st.plotly_chart(fig1, use_container_width=True)
+    
+    with col2:
+        # 2. Enhanced Scatter Plot
+        st.markdown("#### 🎯 Revenue Performance vs Contract Size")
+        
+        fig2 = go.Figure()
+        
+        # Filter out projects with 0% performance for cleaner visualization
+        valid_projects = [p for p in project_performance if p['performance'] > 0]
+        
+        if valid_projects:
+            performances = [p['performance'] for p in valid_projects]
+            colors = ['#00a651' if p >= 95 else '#ff9900' if p >= 85 else '#ee2724' for p in performances]
+            
+            fig2.add_trace(go.Scatter(
+                x=[p['contract_value']/1000000 for p in valid_projects],
+                y=[p['performance'] for p in valid_projects],
+                mode='markers+text',
+                marker=dict(
+                    size=[max(15, min(50, p['contract_value']/500000)) for p in valid_projects],
+                    color=colors,
+                    opacity=0.7,
+                    line=dict(width=2, color='white')
+                ),
+                text=[p['project_id'] for p in valid_projects],
+                textposition='top center',
+                textfont=dict(size=10),
+                hovertemplate='<b>%{text}</b><br>Contract: CHF %{x:.2f}M<br>Performance: %{y:.1f}%<br>Actual: CHF %{customdata[0]:.1f}K<br>Budget: CHF %{customdata[1]:.1f}K<extra></extra>',
+                customdata=[[p['total_actual']/1000, p['total_budget']/1000] for p in valid_projects]
+            ))
+            
+            # Add reference lines
+            fig2.add_hline(y=100, line_dash="dash", line_color="green", annotation_text="Target")
+            fig2.add_hline(y=90, line_dash="dot", line_color="orange", annotation_text="Warning")
+            
+            # Add quadrant shading
+            fig2.add_hrect(y0=95, y1=120, fillcolor="green", opacity=0.1, line_width=0)
+            fig2.add_hrect(y0=85, y1=95, fillcolor="orange", opacity=0.1, line_width=0)
+            fig2.add_hrect(y0=0, y1=85, fillcolor="red", opacity=0.1, line_width=0)
+        
+        fig2.update_layout(
+            height=450,
+            xaxis_title='Contract Value (CHF Millions)',
+            yaxis_title='Revenue Performance %',
+            showlegend=False,
+            plot_bgcolor='rgba(0,0,0,0)',
+            xaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False),
+            yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, range=[0, 120])
+        )
+        
+        st.plotly_chart(fig2, use_container_width=True)
+    
+    # 3. Enhanced Time Series with proper data
+    st.markdown("#### 📈 Portfolio Revenue Trend Analysis")
+    
+    quarterly_totals = []
+    for quarter in ['Q1', 'Q2', 'Q3', 'Q4']:
+        q_data = [item for item in portfolio_quarters[quarter] if item['project_id'] in projects_with_data]
+        total_actual = sum([item['actual'] for item in q_data])
+        total_budget = sum([item['budget'] for item in q_data])
+        
+        # Calculate variance properly
+        if total_budget > 0:
+            variance = ((total_actual - total_budget) / total_budget * 100)
+        else:
+            variance = 0
+            
+        quarterly_totals.append({
+            'quarter': quarter,
+            'actual': total_actual,
+            'budget': total_budget,
+            'variance': variance
+        })
+    
+    # Create enhanced subplot figure
+    fig3 = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=('Portfolio Revenue Trend', 'Quarterly Performance Variance'),
+        specs=[[{"secondary_y": True}, {"type": "bar"}]],
+        horizontal_spacing=0.12
+    )
+    
+    # Revenue trend with improved styling
+    fig3.add_trace(go.Bar(
+        name='Budget',
+        x=[q['quarter'] for q in quarterly_totals],
+        y=[q['budget']/1000000 for q in quarterly_totals],
+        marker_color='lightblue',
+        opacity=0.7,
+        text=[f"{q['budget']/1000000:.2f}" for q in quarterly_totals],
+        textposition='outside',
+        texttemplate='%{text}M'
+    ), row=1, col=1)
+    
+    fig3.add_trace(go.Bar(
+        name='Actual',
+        x=[q['quarter'] for q in quarterly_totals],
+        y=[q['actual']/1000000 for q in quarterly_totals],
+        marker_color='darkblue',
+        text=[f"{q['actual']/1000000:.2f}" for q in quarterly_totals],
+        textposition='outside',
+        texttemplate='%{text}M'
+    ), row=1, col=1)
+    
+    # Add cumulative line with markers
+    cumulative_actual = []
+    cumulative_sum = 0
+    for q in quarterly_totals:
+        cumulative_sum += q['actual']/1000000
+        cumulative_actual.append(cumulative_sum)
+    
+    fig3.add_trace(go.Scatter(
+        name='Cumulative Actual',
+        x=[q['quarter'] for q in quarterly_totals],
+        y=cumulative_actual,
+        mode='lines+markers+text',
+        line=dict(color='red', width=3),
+        marker=dict(size=10),
+        text=[f"{v:.1f}M" for v in cumulative_actual],
+        textposition='top center',
+        yaxis='y2'
+    ), row=1, col=1, secondary_y=True)
+    
+    # Variance analysis with conditional coloring
+    colors = ['green' if v >= -5 else 'orange' if v >= -15 else 'red' for v in [q['variance'] for q in quarterly_totals]]
+    
+    fig3.add_trace(go.Bar(
+        name='Variance %',
+        x=[q['quarter'] for q in quarterly_totals],
+        y=[q['variance'] for q in quarterly_totals],
+        marker_color=colors,
+        text=[f"{q['variance']:.1f}%" for q in quarterly_totals],
+        textposition='outside',
+        showlegend=False
+    ), row=1, col=2)
+    
+    # Add reference lines
+    fig3.add_hline(y=0, line_dash="dash", line_color="black", row=1, col=2)
+    fig3.add_hline(y=-10, line_dash="dot", line_color="orange", row=1, col=2)
+    
+    fig3.update_layout(
+        height=450,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.2),
+        plot_bgcolor='rgba(0,0,0,0)'
+    )
+    
+    fig3.update_xaxes(title_text="Quarter", row=1, col=1)
+    fig3.update_xaxes(title_text="Quarter", row=1, col=2)
+    fig3.update_yaxes(title_text="Revenue (CHF M)", row=1, col=1)
+    fig3.update_yaxes(title_text="Cumulative (CHF M)", secondary_y=True, row=1, col=1)
+    fig3.update_yaxes(title_text="Variance %", row=1, col=2, range=[-100, 20])
+    
+    st.plotly_chart(fig3, use_container_width=True)
+    
+    # 4. Enhanced Project Ranking Table
+    st.markdown("#### 🏆 Project Revenue Performance Ranking")
+    
+    if project_performance:
+        # Calculate additional metrics
+        for p in project_performance:
+            p['achievement_rate'] = (p['total_actual'] / p['total_budget'] * 100) if p['total_budget'] > 0 else 0
+            p['revenue_contribution'] = (p['total_actual'] / sum([x['total_actual'] for x in project_performance]) * 100) if sum([x['total_actual'] for x in project_performance]) > 0 else 0
+        
+        # Create enhanced ranking dataframe
+        ranking_data = []
+        for i, p in enumerate(sorted(project_performance, key=lambda x: x['achievement_rate'], reverse=True)):
+            ranking_data.append({
+                'Rank': i + 1,
+                'Project': p['project_id'],
+                'Name': p['project_name'][:30] + '...' if len(p['project_name']) > 30 else p['project_name'],
+                'Contract Value': format_currency_millions(p['contract_value']),
+                'YTD Actual': format_currency_millions(p['total_actual']),
+                'YTD Budget': format_currency_millions(p['total_budget']),
+                'Achievement': f"{p['achievement_rate']:.1f}%",
+                'Portfolio Share': f"{p['revenue_contribution']:.1f}%",
+                'Status': '🟢' if p['achievement_rate'] >= 95 else '🟡' if p['achievement_rate'] >= 85 else '🔴'
+            })
+        
+        df_ranking = pd.DataFrame(ranking_data)
+        
+        # Apply conditional formatting
+        st.dataframe(
+            df_ranking,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Rank": st.column_config.NumberColumn(width="small"),
+                "Status": st.column_config.TextColumn(width="small"),
+                "Achievement": st.column_config.ProgressColumn(
+                    help="Revenue achievement rate",
+                    format="%f%%",
+                    min_value=0,
+                    max_value=100,
+                ),
+            }
+        )
+        
+        # Summary metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        total_actual = sum([p['total_actual'] for p in project_performance])
+        total_budget = sum([p['total_budget'] for p in project_performance])
+        total_contract = sum([p['contract_value'] for p in project_performance])
+        
+        with col1:
+            achievement = (total_actual / total_budget * 100) if total_budget > 0 else 0
+            st.metric("Portfolio Achievement", f"{achievement:.1f}%", "🟢" if achievement >= 95 else "🟡" if achievement >= 85 else "🔴")
+        
+        with col2:
+            st.metric("Total Revenue YTD", format_currency_millions(total_actual))
+        
+        with col3:
+            st.metric("Total Budget YTD", format_currency_millions(total_budget))
+        
+        with col4:
+            variance = total_actual - total_budget
+            st.metric("Variance", format_currency_millions(variance), "📈" if variance >= 0 else "📉")
+
+
 def render_executive_project_table(portfolio_data):
     """Render comprehensive executive project summary table"""
     st.markdown("## 📋 Executive Project Summary")
@@ -2402,8 +3148,20 @@ def render_executive_project_table(portfolio_data):
             )
             
             # FIX #6: POC velocity using corrected calculation
-            poc_velocity = calculate_poc_velocity(poc_current, poc_previous)
-            poc_icon, _, poc_class = get_traffic_light_status(poc_velocity, EXECUTIVE_THRESHOLDS['poc_velocity'])
+            poc_velocity = calculate_poc_velocity(poc_current, poc_previous)        
+            poc_icon_raw, _, poc_class = get_traffic_light_status(poc_velocity, EXECUTIVE_THRESHOLDS['poc_velocity'])
+            poc_icon_adjusted, poc_status_adjusted, poc_class_adjusted = get_poc_velocity_status_with_maturity(poc_velocity, poc_current)
+
+            # Store the raw icon before potentially overwriting it
+            poc_icon = poc_icon_raw
+            if poc_icon != poc_icon_adjusted:
+                poc_icon = poc_icon_adjusted  # Use adjusted icon
+                poc_class = poc_class_adjusted  # Use adjusted class
+
+            poc_display = f"{poc_velocity:+.1f}% {poc_icon_adjusted}"
+            if poc_icon_raw != poc_icon_adjusted:
+                # Add indicator that status was adjusted for maturity
+                poc_display += " 📊"  # Chart icon indicates maturity-adjusted
             
             # FIX #4: Cost performance using CPI directly
             cpi_icon, _, _ = get_traffic_light_status(cpi, EXECUTIVE_THRESHOLDS['cost_performance_index'])
@@ -2425,7 +3183,7 @@ def render_executive_project_table(portfolio_data):
                 'Committed Ratio': f"{committed_ratio:.2f} {committed_icon}",
                 'Cost Variance': f"{cost_variance_pct:+.1f}%",
                 'Risk Score': f"{risk_score}/10" if risk_score <= 10 else "10+",
-                'Overall Status': get_overall_project_status(cm2_class, committed_class, poc_class)
+                'Overall Status': get_overall_project_status(cm2_class,committed_class,poc_class,poc_current,poc_velocity)
             })
             
         except Exception as e:
@@ -2436,6 +3194,28 @@ def render_executive_project_table(portfolio_data):
         df_summary = pd.DataFrame(projects_summary)
         st.dataframe(df_summary, use_container_width=True)
         
+        with st.expander("ℹ️ Understanding POC Velocity Indicators", expanded=False):
+            st.markdown("""
+            **POC Velocity** shows the rate of progress completion per month:
+            - 🟢 **Green**: Meeting or exceeding expected velocity for project maturity
+            - 🟡 **Yellow**: Below expected velocity but within acceptable range
+            - 🔴 **Red**: Significantly below expected velocity
+            - 📊 **Chart Icon**: Indicates status was adjusted based on project maturity
+        
+            **Expected Velocity by Project Maturity:**
+            - 0-40% Complete: ~10%+ per month
+            - 40-60% Complete: ~7% per month
+            - 60-80% Complete: ~5% per month
+            - 80-90% Complete: ~3% per month
+            - 90-95% Complete: ~2% per month
+            - 95%+ Complete: ~1% per month
+        
+            Projects naturally slow down as they approach completion due to:
+            - Final testing and quality assurance
+            - Documentation and handover activities
+            - Punch list items and minor corrections
+            """)
+
         # Enhanced executive insights
         render_comprehensive_executive_insights(projects_summary)
     else:
@@ -2856,22 +3636,53 @@ def render_comprehensive_project_metrics(project_data):
     with col2:
         cm2_pct = cost_analysis.get('cm2_pct_fct_n', 0)
         cm2_icon, cm2_status, cm2_class = get_traffic_light_status(cm2_pct, EXECUTIVE_THRESHOLDS['cm2_margin'])
+    
+    # Get current thresholds for display
+        cm2_excellent = EXECUTIVE_THRESHOLDS['cm2_margin']['excellent']
+        cm2_good = EXECUTIVE_THRESHOLDS['cm2_margin']['good']
+        cm2_warning = EXECUTIVE_THRESHOLDS['cm2_margin']['warning']
+    
+    # Determine target based on current value
+        if cm2_pct >= cm2_excellent:
+            target_text = f"Excellent (≥{cm2_excellent}%)"
+        elif cm2_pct >= cm2_good:
+            target_text = f"Target: {cm2_excellent}%"
+        elif cm2_pct >= cm2_warning:
+            target_text = f"Target: {cm2_good}%"
+        else:
+            target_text = f"Min Required: {cm2_warning}%"
+    
         st.markdown(f"""
         <div class="metric-card metric-card-{cm2_class}">
             <div class="metric-label">CM2 Margin</div>
             <div class="primary-metric">{cm2_pct:.1f}%</div>
             <div class="metric-trend">{cm2_icon} {cm2_status}</div>
+            <div style="font-size: 0.8rem; color: #666; margin-top: 0.2rem;">
+                {target_text}
+            </div>
         </div>
         """, unsafe_allow_html=True)
     
     with col3:
         poc_velocity = calculate_poc_velocity(poc_n, poc_n1)
-        poc_icon, poc_status, poc_class = get_traffic_light_status(poc_velocity, EXECUTIVE_THRESHOLDS['poc_velocity'])
+    
+        # Get both raw and maturity-adjusted status
+        poc_icon_raw, poc_status_raw, poc_class_raw = get_traffic_light_status(
+            poc_velocity, EXECUTIVE_THRESHOLDS['poc_velocity']
+        )
+        poc_icon_adjusted, poc_status_adjusted, poc_class_adjusted = get_poc_velocity_status_with_maturity(
+            poc_velocity, poc_n
+        )
+    
+        # Show adjusted status
         st.markdown(f"""
-        <div class="metric-card metric-card-{poc_class}">
+        <div class="metric-card metric-card-{poc_class_adjusted}">
             <div class="metric-label">POC Progress</div>
             <div class="primary-metric">{poc_n:.1f}%</div>
-            <div class="metric-trend">{poc_icon} {poc_velocity:+.1f}% /month</div>
+            <div class="metric-trend">{poc_icon_adjusted} {poc_velocity:+.1f}% /month</div>
+            <div style="font-size: 0.8rem; color: #666; margin-top: 0.2rem;">
+                Expected: ~{calculate_expected_poc_velocity(poc_n):.1f}% /month
+            </div>
         </div>
         """, unsafe_allow_html=True)
     
@@ -3359,18 +4170,36 @@ def render_simplified_cash_flow_timeline(project_data):
         fct_n1 = data.get('fct_n1', 0)
         fct_n = data.get('fct_n', 0)
         
-        variance_vs_plan = calculate_period_variance(fct_n, as_sold)
-        variance_vs_previous = calculate_period_variance(fct_n, fct_n1)
-        
-        # Determine quarter status
-        if fct_n >= as_sold:
-            status = "🟢 On/Above Plan"
-        elif variance_vs_plan >= -10:
-            status = "🟡 Slight Variance"
-        elif variance_vs_plan >= -20:
-            status = "🟠 Concerning"
+        # For PADOVA project, handle the case where as_sold can be negative
+        if as_sold != 0:
+            variance_vs_plan = ((fct_n - as_sold) / abs(as_sold)) * 100
         else:
-            status = "🔴 Critical"
+            variance_vs_plan = 0
+            
+        if fct_n1 != 0:
+            variance_vs_previous = ((fct_n - fct_n1) / abs(fct_n1)) * 100
+        else:
+            variance_vs_previous = 0
+        
+        # Determine quarter status - adjust logic for negative cash flows
+        if as_sold < 0:  # For negative expected cash flows (outflows)
+            if fct_n >= as_sold:  # If actual outflow is less than or equal to planned
+                status = "🟢 On/Better than Plan"
+            elif variance_vs_plan >= -10:
+                status = "🟡 Slight Variance"
+            elif variance_vs_plan >= -20:
+                status = "🟠 Concerning"
+            else:
+                status = "🔴 Critical"
+        else:  # For positive expected cash flows (inflows)
+            if fct_n >= as_sold:
+                status = "🟢 On/Above Plan"
+            elif variance_vs_plan >= -10:
+                status = "🟡 Slight Variance"
+            elif variance_vs_plan >= -20:
+                status = "🟠 Concerning"
+            else:
+                status = "🔴 Critical"
         
         quarter_metrics.append({
             'quarter': quarter,
@@ -3388,7 +4217,7 @@ def render_simplified_cash_flow_timeline(project_data):
         
         if fct_n > 0:
             positive_quarters += 1
-        else:
+        elif fct_n < 0:
             negative_quarters += 1
     
     # Key Performance Indicators
@@ -3397,8 +4226,12 @@ def render_simplified_cash_flow_timeline(project_data):
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        overall_variance = calculate_period_variance(total_fct_n, total_as_sold)
-        variance_icon = "🟢" if overall_variance >= 0 else "🟡" if overall_variance >= -10 else "🔴"
+        # Handle the case where both totals might be negative
+        if total_as_sold != 0:
+            overall_variance = ((total_fct_n - total_as_sold) / abs(total_as_sold)) * 100
+        else:
+            overall_variance = 0
+        variance_icon = "🟢" if abs(overall_variance) <= 5 else "🟡" if abs(overall_variance) <= 15 else "🔴"
         st.metric("Overall Performance", f"{overall_variance:+.1f}%", f"{variance_icon}")
     
     with col2:
@@ -3408,9 +4241,13 @@ def render_simplified_cash_flow_timeline(project_data):
         st.metric("Total Forecast", format_currency_millions(total_fct_n))
     
     with col4:
-        cash_flow_consistency = (positive_quarters / len(quarters) * 100) if quarters else 0
+        total_quarters = len(quarters)
+        if total_quarters > 0:
+            cash_flow_consistency = (positive_quarters / total_quarters * 100)
+        else:
+            cash_flow_consistency = 0
         consistency_icon = "🟢" if cash_flow_consistency >= 80 else "🟡" if cash_flow_consistency >= 60 else "🔴"
-        st.metric("Cash Flow Consistency", f"{cash_flow_consistency:.0f}%", f"{consistency_icon}")
+        st.metric("Positive Cash Flow Quarters", f"{cash_flow_consistency:.0f}%", f"{consistency_icon}")
     
     with col5:
         # Calculate cash flow trend
@@ -3421,7 +4258,10 @@ def render_simplified_cash_flow_timeline(project_data):
             early_avg = np.mean([q['fct_n'] for q in early_quarters])
             late_avg = np.mean([q['fct_n'] for q in late_quarters])
             
-            trend = calculate_period_variance(late_avg, early_avg) if early_avg > 0 else 0
+            if early_avg != 0:
+                trend = ((late_avg - early_avg) / abs(early_avg)) * 100
+            else:
+                trend = 100 if late_avg > 0 else -100 if late_avg < 0 else 0
             trend_icon = "📈" if trend > 5 else "📊" if trend > -5 else "📉"
         else:
             trend = 0
@@ -3452,7 +4292,7 @@ def render_simplified_cash_flow_timeline(project_data):
         name='FCT (n)',
         x=[q['quarter'] for q in quarter_metrics],
         y=[q['fct_n']/1000 for q in quarter_metrics],
-        marker_color=['green' if q['variance_vs_plan'] >= 0 else 'orange' if q['variance_vs_plan'] >= -10 else 'red' for q in quarter_metrics],
+        marker_color=['green' if abs(q['variance_vs_plan']) <= 10 else 'orange' if abs(q['variance_vs_plan']) <= 20 else 'red' for q in quarter_metrics],
         opacity=0.8
     ), row=1, col=1)
     
@@ -3471,7 +4311,7 @@ def render_simplified_cash_flow_timeline(project_data):
         name='Variance vs Plan',
         x=[q['quarter'] for q in quarter_metrics],
         y=[q['variance_vs_plan'] for q in quarter_metrics],
-        marker_color=['green' if v >= 0 else 'orange' if v >= -10 else 'red' for v in [q['variance_vs_plan'] for q in quarter_metrics]],
+        marker_color=['green' if abs(v) <= 10 else 'orange' if abs(v) <= 20 else 'red' for v in [q['variance_vs_plan'] for q in quarter_metrics]],
         showlegend=False
     ), row=2, col=1)
     
@@ -3479,6 +4319,8 @@ def render_simplified_cash_flow_timeline(project_data):
     fig.add_hline(y=0, line_dash="dash", line_color="black", row=2, col=1)
     fig.add_hline(y=-10, line_dash="dot", line_color="orange", row=2, col=1)
     fig.add_hline(y=-20, line_dash="dot", line_color="red", row=2, col=1)
+    fig.add_hline(y=10, line_dash="dot", line_color="orange", row=2, col=1)
+    fig.add_hline(y=20, line_dash="dot", line_color="red", row=2, col=1)
     
     fig.update_layout(
         height=700,
@@ -3511,7 +4353,7 @@ def render_simplified_cash_flow_timeline(project_data):
     df_quarterly = pd.DataFrame(quarterly_summary)
     st.dataframe(df_quarterly, use_container_width=True)
     
-    # Cash Flow Insights & Recommendations
+    # Fixed Cash Flow Insights & Recommendations
     st.markdown("### 💡 Cash Flow Insights & Strategic Recommendations")
     
     col1, col2 = st.columns(2)
@@ -3520,61 +4362,67 @@ def render_simplified_cash_flow_timeline(project_data):
         # Performance insights
         excellent_quarters = len([q for q in quarter_metrics if "🟢" in q['status']])
         critical_quarters = len([q for q in quarter_metrics if "🔴" in q['status']])
+        total_quarters_count = len(quarters)
+        
+        # Calculate success rate safely
+        if total_quarters_count > 0:
+            success_rate = ((total_quarters_count - critical_quarters) / total_quarters_count * 100)
+        else:
+            success_rate = 0
+            
+        # Calculate efficiency - handle negative values
+        if total_as_sold != 0:
+            efficiency = (total_fct_n / total_as_sold * 100)
+        else:
+            efficiency = 100 if total_fct_n == 0 else 0
+            
+        # Calculate forecast accuracy
+        forecast_accuracy = (100 - abs(overall_variance))
         
         st.markdown(f"""
         <div class="exec-summary">
             <h4>📊 Performance Analysis</h4>
             <ul>
-                <li><strong>Total Quarters:</strong> {len(quarters)}</li>
+                <li><strong>Total Quarters:</strong> {total_quarters_count}</li>
                 <li><strong>Excellent Performance:</strong> {excellent_quarters} quarters</li>
                 <li><strong>Critical Performance:</strong> {critical_quarters} quarters</li>
-                <li><strong>Success Rate:</strong> {((len(quarters) - critical_quarters)/len(quarters)*100):.0f}%</li>
-                <li><strong>Cash Flow Efficiency:</strong> {(total_fct_n / total_as_sold * 100):.1f}% of plan</li>
-                <li><strong>Forecast Accuracy:</strong> {(100 - abs(overall_variance)):.1f}%</li>
+                <li><strong>Success Rate:</strong> {success_rate:.0f}%</li>
+                <li><strong>Cash Flow Efficiency:</strong> {efficiency:.1f}% of plan</li>
+                <li><strong>Forecast Accuracy:</strong> {forecast_accuracy:.1f}%</li>
+                <li><strong>Net Position:</strong> {format_currency_millions(total_fct_n)}</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
     
     with col2:
-        # Strategic recommendations
+        # Strategic recommendations based on PADOVA's specific cash flow pattern
         recommendations = []
         
-        if overall_variance < -20:
-            recommendations.extend([
-                "🔴 **Critical Alert:** Immediate cash flow intervention required",
-                "📞 **Executive Escalation:** Schedule emergency review meeting",
-                "💰 **Funding:** Secure additional credit facilities"
-            ])
-        elif overall_variance < -10:
-            recommendations.extend([
-                "🟡 **Enhanced Monitoring:** Weekly cash flow tracking",
-                "🎯 **Recovery Plan:** Develop quarter-specific action plans",
-                "📊 **Root Cause Analysis:** Investigate forecast accuracy issues"
-            ])
-        elif overall_variance > 15:
-            recommendations.extend([
-                "🟢 **Excellent Performance:** Cash flow ahead of plan",
-                "💡 **Growth Opportunity:** Consider project acceleration",
-                "📈 **Investment:** Evaluate expansion opportunities"
-            ])
+        # Check if this is an investment phase (negative early cash flows, positive later)
+        early_cash_flow = sum([q['fct_n'] for q in quarter_metrics[:len(quarter_metrics)//2]])
+        late_cash_flow = sum([q['fct_n'] for q in quarter_metrics[len(quarter_metrics)//2:]])
+        
+        if early_cash_flow < 0 and late_cash_flow > 0:
+            recommendations.append("💼 **Investment Phase Project:** Early outflows followed by returns")
+            recommendations.append("📊 **Monitor Payback:** Track when cumulative cash flow turns positive")
+        
+        if abs(overall_variance) <= 5:
+            recommendations.append("✅ **Excellent Forecast:** Cash flows tracking very close to plan")
+        elif abs(overall_variance) <= 15:
+            recommendations.append("🟡 **Good Performance:** Minor variances from plan")
         else:
-            recommendations.extend([
-                "✅ **Stable Performance:** Maintain current practices",
-                "🎯 **Optimization:** Identify efficiency improvements"
-            ])
+            recommendations.append("🔴 **Variance Alert:** Significant deviation from planned cash flows")
         
-        # Quarter-specific recommendations
+        if negative_quarters > positive_quarters:
+            recommendations.append("💸 **Funding Focus:** More outflow quarters than inflow - ensure adequate financing")
+        
         if critical_quarters > 0:
-            recommendations.append(f"⚠️ **Focus:** {critical_quarters} quarters need immediate attention")
+            recommendations.append(f"⚠️ **Risk Areas:** {critical_quarters} quarters with critical variances")
         
-        if negative_quarters > len(quarters) * 0.3:
-            recommendations.append("💸 **Cash Management:** Multiple negative quarters detected")
-        
-        # Add best practice recommendations
+        # General recommendations
         recommendations.extend([
-            "📊 **Regular Reviews:** Implement monthly cash flow monitoring",
-            "🎯 **Milestone Management:** Align payments with deliverables",
-            "🏆 **Best Practices:** Document and replicate success factors"
+            "📊 **Regular Reviews:** Continue monthly cash flow monitoring",
+            "🎯 **Milestone Tracking:** Ensure major inflows align with deliverables"
         ])
         
         st.markdown(f"""
@@ -3589,10 +4437,15 @@ def render_simplified_cash_flow_timeline(project_data):
     # Cash Flow Health Score
     st.markdown("### 🏥 Cash Flow Health Assessment")
     
-    # Calculate health score
-    variance_score = max(0, 100 + overall_variance) if overall_variance < 0 else min(100, 100 + overall_variance/2)
+    # Calculate health score - adjusted for projects with negative cash flows
+    variance_score = max(0, 100 - abs(overall_variance))
     consistency_score = cash_flow_consistency
-    trend_score = max(0, min(100, 50 + trend))
+    
+    # Trend score adjusted for negative values
+    if trend > 0:
+        trend_score = min(100, 50 + trend/2)
+    else:
+        trend_score = max(0, 50 + trend/2)
     
     overall_health = (variance_score + consistency_score + trend_score) / 3
     
@@ -3971,6 +4824,10 @@ def render_portfolio_overview_page():
         # NEW: ADD MARGIN VARIABILITY ANALYSIS
         st.markdown("---")
         render_margin_variability_analysis(portfolio_data)
+
+        # ADD NEW REVENUE ANALYTICS HERE
+        st.markdown("---")
+        render_portfolio_revenue_analytics(portfolio_data)  # <-- NEW SECTION
         
         # CONTINUE WITH EXISTING SECTIONS
         render_work_package_analysis(portfolio_data)
@@ -4009,18 +4866,32 @@ def main():
         help="Navigate between dashboard sections"
     )
     
-    # Sidebar settings
+
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚙️ Settings")
-    
+
     with st.sidebar.expander("🎯 Thresholds"):
-        cm2_excellent = st.number_input("CM2 Excellent (%)", value=15.0, step=1.0)
-        cm2_good = st.number_input("CM2 Good (%)", value=10.0, step=1.0)
-        
-        # Update thresholds
+        # CM2 Thresholds
+        st.markdown("**CM2 Margin Thresholds**")
+        cm2_excellent = st.number_input("CM2 Excellent (%)", value=15.0, step=1.0, key="cm2_excellent")
+        cm2_good = st.number_input("CM2 Good (%)", value=10.0, step=1.0, key="cm2_good")
+        cm2_warning = st.number_input("CM2 Warning (%)", value=5.0, step=1.0, key="cm2_warning")
+    
+        st.markdown("---")
+    
+    # Update all thresholds
         EXECUTIVE_THRESHOLDS['cm2_margin']['excellent'] = cm2_excellent
         EXECUTIVE_THRESHOLDS['cm2_margin']['good'] = cm2_good
-    
+        EXECUTIVE_THRESHOLDS['cm2_margin']['warning'] = cm2_warning
+        EXECUTIVE_THRESHOLDS['cm2_margin']['critical'] = 0  # Always 0
+
+# Add this right after the threshold settings
+#    if st.sidebar.checkbox("Show Active Thresholds", value=False):
+#        st.sidebar.markdown("**Active Threshold Values:**")
+#        st.sidebar.json({
+#            "CM2": EXECUTIVE_THRESHOLDS['cm2_margin'],
+#        })
+
     # Project status
     if st.session_state.projects_data:
         st.sidebar.markdown("---")
