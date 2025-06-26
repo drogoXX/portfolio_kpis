@@ -3019,7 +3019,6 @@ def render_risk_mitigation_recommendations(all_risks, risk_summary):
     for recommendation in portfolio_recommendations:
         st.info(recommendation)
 
-
 def render_portfolio_revenue_analytics(portfolio_data):
     """Render comprehensive portfolio revenue analytics - ENHANCED VERSION"""
     st.markdown("## 📊 Portfolio Revenue Analytics Dashboard")
@@ -3182,23 +3181,23 @@ def render_portfolio_revenue_analytics(portfolio_data):
         fig1.update_xaxes(tickangle=-45)
         
         st.plotly_chart(fig1, use_container_width=True)
-
+    
     with col2:
         # 2. ENHANCED Quarterly Performance Scatter Plot
         st.markdown(f"#### 🎯 {selected_quarter} Revenue Performance vs Contract Size")
-    
+        
         fig2 = go.Figure()
-    
+        
         # Filter for projects with valid quarterly performance
         valid_projects = [p for p in project_performance if p['quarterly_performance'] > 0 or p['quarterly_budget'] > 0]
-    
+        
         if valid_projects:
             performances = [p['quarterly_performance'] for p in valid_projects]
             colors = ['#00a651' if p >= 95 else '#ff9900' if p >= 85 else '#ee2724' for p in performances]
-        
+            
             # Calculate bubble sizes based on quarterly revenue (not contract value)
             max_q_revenue = max([p['quarterly_actual'] for p in valid_projects]) if valid_projects else 1
-        
+            
             # Prevent division by zero
             if max_q_revenue == 0:
                 # If all projects have zero actual revenue, use budget for sizing
@@ -3213,7 +3212,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
             else:
                 bubble_sizes = [max(15, min(50, (p['quarterly_actual']/max_q_revenue)*50)) for p in valid_projects]
                 size_note = "Bubble size = Quarterly Revenue"
-        
+            
             fig2.add_trace(go.Scatter(
                 x=[p['contract_value']/1000000 for p in valid_projects],
                 y=[p['quarterly_performance'] for p in valid_projects],
@@ -3228,20 +3227,20 @@ def render_portfolio_revenue_analytics(portfolio_data):
                 textposition='top center',
                 textfont=dict(size=10),
                 customdata=[[p['quarterly_actual']/1000, p['quarterly_budget']/1000, p['quarterly_performance']] 
-                       for p in valid_projects],
+                           for p in valid_projects],
                 hovertemplate='<b>%{text}</b><br>Contract: CHF %{x:.2f}M<br>' + 
-                         f'{selected_quarter} Performance: %{customdata[2]:.1f}%<br>' +
-                         f'{selected_quarter} Actual: CHF %{customdata[0]:.1f}K<br>' +
-                         f'{selected_quarter} Budget: CHF %{customdata[1]:.1f}K<br>' +
-                         f'{size_note}<extra></extra>'
+                             f'{selected_quarter} Performance: %{{customdata[2]:.1f}}%<br>' +
+                             f'{selected_quarter} Actual: CHF %{{customdata[0]:.1f}}K<br>' +
+                             f'{selected_quarter} Budget: CHF %{{customdata[1]:.1f}}K<br>' +
+                             f'{size_note}<extra></extra>'
             ))
-        
+            
             # Add reference lines
             fig2.add_hline(y=100, line_dash="dash", line_color="green", 
                           annotation_text="Target", annotation_position="right")
             fig2.add_hline(y=90, line_dash="dot", line_color="orange", 
                           annotation_text="Warning", annotation_position="right")
-        
+            
             # Add quadrant shading
             fig2.add_hrect(y0=95, y1=120, fillcolor="green", opacity=0.1, line_width=0,
                           annotation_text="On/Above Target", annotation_position="top right")
@@ -3252,7 +3251,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
         else:
             # No valid projects for this quarter
             st.info(f"No projects with budget data for {selected_quarter}")
-    
+        
         fig2.update_layout(
             height=450,
             xaxis_title='Contract Value (CHF Millions)',
@@ -3263,7 +3262,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
             yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, range=[0, 120]),
             title_font_size=14
         )
-    
+        
         st.plotly_chart(fig2, use_container_width=True)
     
     # 3. Enhanced Time Series with quarterly focus
@@ -3496,6 +3495,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
                 </ul>
             </div>
             """, unsafe_allow_html=True)
+
 
 
 def render_executive_project_table(portfolio_data):
