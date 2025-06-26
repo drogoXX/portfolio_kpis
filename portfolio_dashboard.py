@@ -3421,7 +3421,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
                 'Contract Value': format_currency_millions(p['contract_value']),
                 f'{selected_quarter} Budget': format_currency_thousands(p['quarterly_budget']),
                 f'{selected_quarter} Actual': format_currency_thousands(p['quarterly_actual']),
-                f'{selected_quarter} Performance': f"{p['quarterly_performance']:.1f}%",
+		f'{selected_quarter} Performance': p['quarterly_performance'],
                 'Variance': format_currency_thousands(p['quarterly_actual'] - p['quarterly_budget']),
                 'Status': perf_icon
             })
@@ -3438,7 +3438,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
                 "Status": st.column_config.TextColumn(width="small"),
                 f"{selected_quarter} Performance": st.column_config.ProgressColumn(
                     help="Revenue achievement rate for selected quarter",
-                    format="%f%%",
+                    format="%.1f%%",
                     min_value=0,
                     max_value=150,
                 ),
