@@ -3182,7 +3182,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
         fig1.update_xaxes(tickangle=-45)
         
         st.plotly_chart(fig1, use_container_width=True)
-    
+
     with col2:
         # 2. ENHANCED Quarterly Performance Scatter Plot
         st.markdown(f"#### 🎯 {selected_quarter} Revenue Performance vs Contract Size")
@@ -3227,13 +3227,13 @@ def render_portfolio_revenue_analytics(portfolio_data):
                 text=[p['project_id'] for p in valid_projects],
                 textposition='top center',
                 textfont=dict(size=10),
-                hovertemplate='<b>%{text}</b><br>Contract: CHF %{x:.2f}M<br>' + 
-                             f'{selected_quarter} Performance: %{customdata[2]:.1f}%<br>' +
-                             f'{selected_quarter} Actual: CHF %{customdata[0]:.1f}K<br>' +
-                             f'{selected_quarter} Budget: CHF %{customdata[1]:.1f}K<br>' +
-                             f'{size_note}<extra></extra>',
                 customdata=[[p['quarterly_actual']/1000, p['quarterly_budget']/1000, p['quarterly_performance']] 
-                           for p in valid_projects]
+                       for p in valid_projects],
+                hovertemplate='<b>%{text}</b><br>Contract: CHF %{x:.2f}M<br>' + 
+                         f'{selected_quarter} Performance: %{customdata[2]:.1f}%<br>' +
+                         f'{selected_quarter} Actual: CHF %{customdata[0]:.1f}K<br>' +
+                         f'{selected_quarter} Budget: CHF %{customdata[1]:.1f}K<br>' +
+                         f'{size_note}<extra></extra>'
             ))
         
             # Add reference lines
