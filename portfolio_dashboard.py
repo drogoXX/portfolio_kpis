@@ -3027,6 +3027,36 @@ def render_portfolio_revenue_analytics(portfolio_data):
     # Debug mode for data verification
     debug_mode = st.checkbox("Show Revenue Data Debug Info", value=False, key="revenue_debug")
     
+    # Collect available quarters across all projects
+    available_quarters = set()
+    for project_id, project in portfolio_data.items():
+        quarterly_data = project['data'].get('quarterly', {})
+        for quarter in quarterly_data.keys():
+            if quarter != 'Total':  # Exclude 'Total' entry
+                available_quarters.add(quarter)
+    
+    available_quarters = sorted(list(available_quarters))
+    
+    if not available_quarters:
+        st.warning("⚠️ No quarterly revenue data found in the uploaded files.")
+        st.info("Please ensure your Excel templates contain quarterly revenue data in the 'Project Revenues' sheet.")
+        return
+    
+    # Quarter selector for focused analysis
+    st.markdown("### 🎯 Quarter Selection")
+    col_q1, col_q2, col_q3 = st.columns([2, 3, 5])
+    
+    with col_q1:
+        selected_quarter = st.selectbox(
+            "Select Quarter for Analysis",
+            available_quarters,
+            index=len(available_quarters)-1 if available_quarters else 0,  # Default to latest quarter
+            help="Choose which quarter to analyze for revenue performance"
+        )
+    
+    with col_q2:
+        st.info(f"📅 Analyzing: **{selected_quarter}**")
+    
     # Collect and validate quarterly data
     portfolio_quarters = {'Q1': [], 'Q2': [], 'Q3': [], 'Q4': []}
     project_performance = []
@@ -3050,6 +3080,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
             total_budget = 0
             has_valid_data = False
             
+            # Collect data for all quarters (for other visualizations)
             for quarter in ['Q1', 'Q2', 'Q3', 'Q4']:
                 q_data = quarterly_data.get(quarter, {})
                 
@@ -3076,36 +3107,44 @@ def render_portfolio_revenue_analytics(portfolio_data):
                 total_actual += actual
                 total_budget += budget
             
-            if has_valid_data:
+            # Get specific quarter data for performance calculation
+            selected_q_data = quarterly_data.get(selected_quarter, {})
+            q_actual = selected_q_data.get('actuals', 0) or selected_q_data.get('actual', 0) or selected_q_data.get('revenue', 0)
+            q_budget = selected_q_data.get('budget', 0) or selected_q_data.get('planned', 0)
+            
+            # If no budget, use gap_to_close + actuals as approximation
+            if q_budget == 0 and 'gap_to_close' in selected_q_data:
+                q_budget = q_actual + selected_q_data.get('gap_to_close', 0)
+            
+            # Only include projects with valid data for selected quarter
+            if q_budget > 0:  # Only include if there's a budget for the quarter
                 projects_with_data.append(project_id)
                 
-                # Calculate performance metric
-                if total_budget > 0:
-                    performance = (total_actual / total_budget * 100)
-                else:
-                    # Fallback: compare to contract value portion
-                    expected_revenue = contract_value * 0.25  # Assume 25% per quarter average
-                    performance = (total_actual / (expected_revenue * 4) * 100) if expected_revenue > 0 else 0
+                # Calculate quarterly performance
+                q_performance = (q_actual / q_budget * 100) if q_budget > 0 else 0
                 
                 project_performance.append({
                     'project_id': project_id,
                     'project_name': project['name'],
                     'contract_value': contract_value,
-                    'total_actual': total_actual,
-                    'total_budget': total_budget if total_budget > 0 else contract_value * 0.25 * 4,
-                    'performance': performance
+                    'quarterly_actual': q_actual,
+                    'quarterly_budget': q_budget,
+                    'quarterly_performance': q_performance,
+                    'total_actual': total_actual,  # Keep for other charts
+                    'total_budget': total_budget,   # Keep for other charts
+                    'quarter': selected_quarter
                 })
     
     if not projects_with_data:
-        st.warning("⚠️ No valid quarterly revenue data found in the uploaded files.")
-        st.info("Please ensure your Excel templates contain quarterly revenue data in the 'Project Revenues' sheet.")
+        st.warning(f"⚠️ No valid revenue data found for {selected_quarter}.")
+        st.info("Please select a different quarter or ensure your Excel templates contain quarterly budget data.")
         return
     
     # Create visualizations with enhanced styling
     col1, col2 = st.columns(2)
     
     with col1:
-        # 1. Enhanced Stacked Bar Chart
+        # 1. Enhanced Stacked Bar Chart (keep existing for all quarters overview)
         st.markdown("#### 📊 Quarterly Revenue Distribution by Project")
         
         fig1 = go.Figure()
@@ -3145,24 +3184,28 @@ def render_portfolio_revenue_analytics(portfolio_data):
         st.plotly_chart(fig1, use_container_width=True)
     
     with col2:
-        # 2. Enhanced Scatter Plot
-        st.markdown("#### 🎯 Revenue Performance vs Contract Size")
+        # 2. ENHANCED Quarterly Performance Scatter Plot
+        st.markdown(f"#### 🎯 {selected_quarter} Revenue Performance vs Contract Size")
         
         fig2 = go.Figure()
         
-        # Filter out projects with 0% performance for cleaner visualization
-        valid_projects = [p for p in project_performance if p['performance'] > 0]
+        # Filter for projects with valid quarterly performance
+        valid_projects = [p for p in project_performance if p['quarterly_performance'] > 0 or p['quarterly_budget'] > 0]
         
         if valid_projects:
-            performances = [p['performance'] for p in valid_projects]
+            performances = [p['quarterly_performance'] for p in valid_projects]
             colors = ['#00a651' if p >= 95 else '#ff9900' if p >= 85 else '#ee2724' for p in performances]
+            
+            # Calculate bubble sizes based on quarterly revenue (not contract value)
+            max_q_revenue = max([p['quarterly_actual'] for p in valid_projects]) if valid_projects else 1
+            bubble_sizes = [max(15, min(50, (p['quarterly_actual']/max_q_revenue)*50)) for p in valid_projects]
             
             fig2.add_trace(go.Scatter(
                 x=[p['contract_value']/1000000 for p in valid_projects],
-                y=[p['performance'] for p in valid_projects],
+                y=[p['quarterly_performance'] for p in valid_projects],
                 mode='markers+text',
                 marker=dict(
-                    size=[max(15, min(50, p['contract_value']/500000)) for p in valid_projects],
+                    size=bubble_sizes,
                     color=colors,
                     opacity=0.7,
                     line=dict(width=2, color='white')
@@ -3170,33 +3213,64 @@ def render_portfolio_revenue_analytics(portfolio_data):
                 text=[p['project_id'] for p in valid_projects],
                 textposition='top center',
                 textfont=dict(size=10),
-                hovertemplate='<b>%{text}</b><br>Contract: CHF %{x:.2f}M<br>Performance: %{y:.1f}%<br>Actual: CHF %{customdata[0]:.1f}K<br>Budget: CHF %{customdata[1]:.1f}K<extra></extra>',
-                customdata=[[p['total_actual']/1000, p['total_budget']/1000] for p in valid_projects]
+                hovertemplate='<b>%{text}</b><br>Contract: CHF %{x:.2f}M<br>' + 
+                             f'{selected_quarter} Performance: %{customdata[2]:.1f}%<br>' +
+                             f'{selected_quarter} Actual: CHF %{customdata[0]:.1f}K<br>' +
+                             f'{selected_quarter} Budget: CHF %{customdata[1]:.1f}K<br>' +
+                             'Bubble size = Quarterly Revenue<extra></extra>',
+                customdata=[[p['quarterly_actual']/1000, p['quarterly_budget']/1000, p['quarterly_performance']] 
+                           for p in valid_projects]
             ))
             
             # Add reference lines
-            fig2.add_hline(y=100, line_dash="dash", line_color="green", annotation_text="Target")
-            fig2.add_hline(y=90, line_dash="dot", line_color="orange", annotation_text="Warning")
+            fig2.add_hline(y=100, line_dash="dash", line_color="green", 
+                          annotation_text="Target", annotation_position="right")
+            fig2.add_hline(y=90, line_dash="dot", line_color="orange", 
+                          annotation_text="Warning", annotation_position="right")
             
             # Add quadrant shading
-            fig2.add_hrect(y0=95, y1=120, fillcolor="green", opacity=0.1, line_width=0)
-            fig2.add_hrect(y0=85, y1=95, fillcolor="orange", opacity=0.1, line_width=0)
-            fig2.add_hrect(y0=0, y1=85, fillcolor="red", opacity=0.1, line_width=0)
+            fig2.add_hrect(y0=95, y1=120, fillcolor="green", opacity=0.1, line_width=0,
+                          annotation_text="On/Above Target", annotation_position="top right")
+            fig2.add_hrect(y0=85, y1=95, fillcolor="orange", opacity=0.1, line_width=0,
+                          annotation_text="Slightly Below", annotation_position="top right")
+            fig2.add_hrect(y0=0, y1=85, fillcolor="red", opacity=0.1, line_width=0,
+                          annotation_text="Significantly Below", annotation_position="top right")
         
         fig2.update_layout(
             height=450,
             xaxis_title='Contract Value (CHF Millions)',
-            yaxis_title='Revenue Performance %',
+            yaxis_title=f'{selected_quarter} Revenue Performance %',
             showlegend=False,
             plot_bgcolor='rgba(0,0,0,0)',
             xaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False),
-            yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, range=[0, 120])
+            yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, range=[0, 120]),
+            title_font_size=14
         )
         
         st.plotly_chart(fig2, use_container_width=True)
     
-    # 3. Enhanced Time Series with proper data
+    # 3. Enhanced Time Series with quarterly focus
     st.markdown("#### 📈 Portfolio Revenue Trend Analysis")
+    
+    # Add quarter performance summary
+    selected_q_metrics = [p for p in project_performance if p['quarter'] == selected_quarter]
+    if selected_q_metrics:
+        total_q_actual = sum([p['quarterly_actual'] for p in selected_q_metrics])
+        total_q_budget = sum([p['quarterly_budget'] for p in selected_q_metrics])
+        overall_q_performance = (total_q_actual / total_q_budget * 100) if total_q_budget > 0 else 0
+        
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        with col_m1:
+            st.metric(f"{selected_quarter} Budget", format_currency_millions(total_q_budget))
+        with col_m2:
+            st.metric(f"{selected_quarter} Actual", format_currency_millions(total_q_actual))
+        with col_m3:
+            perf_delta = overall_q_performance - 100
+            st.metric(f"{selected_quarter} Performance", f"{overall_q_performance:.1f}%", 
+                     f"{perf_delta:+.1f}%")
+        with col_m4:
+            on_target_count = len([p for p in selected_q_metrics if p['quarterly_performance'] >= 95])
+            st.metric("Projects On Target", f"{on_target_count}/{len(selected_q_metrics)}")
     
     quarterly_totals = []
     for quarter in ['Q1', 'Q2', 'Q3', 'Q4']:
@@ -3214,23 +3288,28 @@ def render_portfolio_revenue_analytics(portfolio_data):
             'quarter': quarter,
             'actual': total_actual,
             'budget': total_budget,
-            'variance': variance
+            'variance': variance,
+            'is_selected': quarter == selected_quarter
         })
     
     # Create enhanced subplot figure
     fig3 = make_subplots(
         rows=1, cols=2,
-        subplot_titles=('Portfolio Revenue Trend', 'Quarterly Performance Variance'),
+        subplot_titles=('Portfolio Revenue Trend', f'{selected_quarter} Performance Distribution'),
         specs=[[{"secondary_y": True}, {"type": "bar"}]],
         horizontal_spacing=0.12
     )
     
-    # Revenue trend with improved styling
+    # Revenue trend with improved styling and selected quarter highlight
+    quarters_list = [q['quarter'] for q in quarterly_totals]
+    budget_colors = ['lightblue' if not q['is_selected'] else 'darkblue' for q in quarterly_totals]
+    actual_colors = ['darkblue' if not q['is_selected'] else 'darkgreen' for q in quarterly_totals]
+    
     fig3.add_trace(go.Bar(
         name='Budget',
-        x=[q['quarter'] for q in quarterly_totals],
+        x=quarters_list,
         y=[q['budget']/1000000 for q in quarterly_totals],
-        marker_color='lightblue',
+        marker_color=budget_colors,
         opacity=0.7,
         text=[f"{q['budget']/1000000:.2f}" for q in quarterly_totals],
         textposition='outside',
@@ -3239,9 +3318,9 @@ def render_portfolio_revenue_analytics(portfolio_data):
     
     fig3.add_trace(go.Bar(
         name='Actual',
-        x=[q['quarter'] for q in quarterly_totals],
+        x=quarters_list,
         y=[q['actual']/1000000 for q in quarterly_totals],
-        marker_color='darkblue',
+        marker_color=actual_colors,
         text=[f"{q['actual']/1000000:.2f}" for q in quarterly_totals],
         textposition='outside',
         texttemplate='%{text}M'
@@ -3256,7 +3335,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
     
     fig3.add_trace(go.Scatter(
         name='Cumulative Actual',
-        x=[q['quarter'] for q in quarterly_totals],
+        x=quarters_list,
         y=cumulative_actual,
         mode='lines+markers+text',
         line=dict(color='red', width=3),
@@ -3266,60 +3345,69 @@ def render_portfolio_revenue_analytics(portfolio_data):
         yaxis='y2'
     ), row=1, col=1, secondary_y=True)
     
-    # Variance analysis with conditional coloring
-    colors = ['green' if v >= -5 else 'orange' if v >= -15 else 'red' for v in [q['variance'] for q in quarterly_totals]]
-    
-    fig3.add_trace(go.Bar(
-        name='Variance %',
-        x=[q['quarter'] for q in quarterly_totals],
-        y=[q['variance'] for q in quarterly_totals],
-        marker_color=colors,
-        text=[f"{q['variance']:.1f}%" for q in quarterly_totals],
-        textposition='outside',
-        showlegend=False
-    ), row=1, col=2)
-    
-    # Add reference lines
-    fig3.add_hline(y=0, line_dash="dash", line_color="black", row=1, col=2)
-    fig3.add_hline(y=-10, line_dash="dot", line_color="orange", row=1, col=2)
+    # Performance distribution for selected quarter
+    if selected_q_metrics:
+        performance_ranges = {
+            '0-50%': len([p for p in selected_q_metrics if 0 <= p['quarterly_performance'] < 50]),
+            '50-85%': len([p for p in selected_q_metrics if 50 <= p['quarterly_performance'] < 85]),
+            '85-95%': len([p for p in selected_q_metrics if 85 <= p['quarterly_performance'] < 95]),
+            '95-100%': len([p for p in selected_q_metrics if 95 <= p['quarterly_performance'] <= 100]),
+            '>100%': len([p for p in selected_q_metrics if p['quarterly_performance'] > 100])
+        }
+        
+        fig3.add_trace(go.Bar(
+            name='Projects',
+            x=list(performance_ranges.keys()),
+            y=list(performance_ranges.values()),
+            marker_color=['red', 'orange', 'yellow', 'lightgreen', 'darkgreen'],
+            text=list(performance_ranges.values()),
+            textposition='outside',
+            showlegend=False
+        ), row=1, col=2)
     
     fig3.update_layout(
         height=450,
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=-0.2),
-        plot_bgcolor='rgba(0,0,0,0)'
+        plot_bgcolor='rgba(0,0,0,0)',
+        title_text=f"Revenue Analysis with {selected_quarter} Focus"
     )
     
     fig3.update_xaxes(title_text="Quarter", row=1, col=1)
-    fig3.update_xaxes(title_text="Quarter", row=1, col=2)
+    fig3.update_xaxes(title_text="Performance Range", row=1, col=2)
     fig3.update_yaxes(title_text="Revenue (CHF M)", row=1, col=1)
     fig3.update_yaxes(title_text="Cumulative (CHF M)", secondary_y=True, row=1, col=1)
-    fig3.update_yaxes(title_text="Variance %", row=1, col=2, range=[-100, 20])
+    fig3.update_yaxes(title_text="Number of Projects", row=1, col=2)
     
     st.plotly_chart(fig3, use_container_width=True)
     
-    # 4. Enhanced Project Ranking Table
-    st.markdown("#### 🏆 Project Revenue Performance Ranking")
+    # 4. Enhanced Project Ranking Table - Focused on Selected Quarter
+    st.markdown(f"#### 🏆 {selected_quarter} Project Performance Ranking")
     
-    if project_performance:
-        # Calculate additional metrics
-        for p in project_performance:
-            p['achievement_rate'] = (p['total_actual'] / p['total_budget'] * 100) if p['total_budget'] > 0 else 0
-            p['revenue_contribution'] = (p['total_actual'] / sum([x['total_actual'] for x in project_performance]) * 100) if sum([x['total_actual'] for x in project_performance]) > 0 else 0
-        
+    if selected_q_metrics:
         # Create enhanced ranking dataframe
         ranking_data = []
-        for i, p in enumerate(sorted(project_performance, key=lambda x: x['achievement_rate'], reverse=True)):
+        for i, p in enumerate(sorted(selected_q_metrics, key=lambda x: x['quarterly_performance'], reverse=True)):
+            # Determine performance status
+            if p['quarterly_performance'] >= 100:
+                perf_icon = '🌟'  # Exceeding
+            elif p['quarterly_performance'] >= 95:
+                perf_icon = '🟢'  # On target
+            elif p['quarterly_performance'] >= 85:
+                perf_icon = '🟡'  # Slightly below
+            else:
+                perf_icon = '🔴'  # Significantly below
+            
             ranking_data.append({
                 'Rank': i + 1,
                 'Project': p['project_id'],
                 'Name': p['project_name'][:30] + '...' if len(p['project_name']) > 30 else p['project_name'],
                 'Contract Value': format_currency_millions(p['contract_value']),
-                'YTD Actual': format_currency_millions(p['total_actual']),
-                'YTD Budget': format_currency_millions(p['total_budget']),
-                'Achievement': f"{p['achievement_rate']:.1f}%",
-                'Portfolio Share': f"{p['revenue_contribution']:.1f}%",
-                'Status': '🟢' if p['achievement_rate'] >= 95 else '🟡' if p['achievement_rate'] >= 85 else '🔴'
+                f'{selected_quarter} Budget': format_currency_thousands(p['quarterly_budget']),
+                f'{selected_quarter} Actual': format_currency_thousands(p['quarterly_actual']),
+                f'{selected_quarter} Performance': f"{p['quarterly_performance']:.1f}%",
+                'Variance': format_currency_thousands(p['quarterly_actual'] - p['quarterly_budget']),
+                'Status': perf_icon
             })
         
         df_ranking = pd.DataFrame(ranking_data)
@@ -3332,35 +3420,65 @@ def render_portfolio_revenue_analytics(portfolio_data):
             column_config={
                 "Rank": st.column_config.NumberColumn(width="small"),
                 "Status": st.column_config.TextColumn(width="small"),
-                "Achievement": st.column_config.ProgressColumn(
-                    help="Revenue achievement rate",
+                f"{selected_quarter} Performance": st.column_config.ProgressColumn(
+                    help="Revenue achievement rate for selected quarter",
                     format="%f%%",
                     min_value=0,
-                    max_value=100,
+                    max_value=150,
                 ),
             }
         )
         
-        # Summary metrics
-        col1, col2, col3, col4 = st.columns(4)
+        # Performance insights for selected quarter
+        st.markdown(f"### 💡 {selected_quarter} Performance Insights")
         
-        total_actual = sum([p['total_actual'] for p in project_performance])
-        total_budget = sum([p['total_budget'] for p in project_performance])
-        total_contract = sum([p['contract_value'] for p in project_performance])
+        col_i1, col_i2 = st.columns(2)
         
-        with col1:
-            achievement = (total_actual / total_budget * 100) if total_budget > 0 else 0
-            st.metric("Portfolio Achievement", f"{achievement:.1f}%", "🟢" if achievement >= 95 else "🟡" if achievement >= 85 else "🔴")
+        with col_i1:
+            # Performance distribution
+            excellent_count = len([p for p in selected_q_metrics if p['quarterly_performance'] >= 100])
+            on_target_count = len([p for p in selected_q_metrics if 95 <= p['quarterly_performance'] < 100])
+            below_target_count = len([p for p in selected_q_metrics if p['quarterly_performance'] < 95])
+            
+            st.markdown(f"""
+            <div class="exec-summary">
+                <h4>📊 {selected_quarter} Performance Summary</h4>
+                <ul>
+                    <li><strong>Exceeding Target (≥100%):</strong> {excellent_count} projects</li>
+                    <li><strong>On Target (95-100%):</strong> {on_target_count} projects</li>
+                    <li><strong>Below Target (<95%):</strong> {below_target_count} projects</li>
+                    <li><strong>Overall Achievement:</strong> {overall_q_performance:.1f}%</li>
+                    <li><strong>Revenue Gap:</strong> {format_currency_thousands(total_q_actual - total_q_budget)}</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
         
-        with col2:
-            st.metric("Total Revenue YTD", format_currency_millions(total_actual))
-        
-        with col3:
-            st.metric("Total Budget YTD", format_currency_millions(total_budget))
-        
-        with col4:
-            variance = total_actual - total_budget
-            st.metric("Variance", format_currency_millions(variance), "📈" if variance >= 0 else "📉")
+        with col_i2:
+            # Top and bottom performers
+            top_performers = sorted(selected_q_metrics, key=lambda x: x['quarterly_performance'], reverse=True)[:3]
+            bottom_performers = sorted(selected_q_metrics, key=lambda x: x['quarterly_performance'])[:3]
+            
+            recommendations = []
+            if overall_q_performance < 95:
+                recommendations.append(f"🔴 **Revenue Gap Alert:** {selected_quarter} is {95-overall_q_performance:.1f}% below target")
+            if below_target_count > len(selected_q_metrics) * 0.5:
+                recommendations.append(f"⚠️ **Portfolio Risk:** Over 50% of projects below target in {selected_quarter}")
+            if excellent_count > 0:
+                recommendations.append(f"🌟 **Best Practices:** Study {excellent_count} exceeding projects for lessons learned")
+            
+            recommendations.extend([
+                "📊 **Focus Areas:** Prioritize bottom 3 performers for intervention",
+                "📈 **Revenue Recovery:** Implement catch-up plans for below-target projects"
+            ])
+            
+            st.markdown(f"""
+            <div class="exec-summary">
+                <h4>🎯 Strategic Recommendations</h4>
+                <ul>
+                    {''.join([f'<li>{rec}</li>' for rec in recommendations])}
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
 
 
 def render_executive_project_table(portfolio_data):
