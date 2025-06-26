@@ -3243,7 +3243,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
                           annotation_text="Warning", annotation_position="right")
             
             # Add quadrant shading
-            fig2.add_hrect(y0=95, y1=130, fillcolor="green", opacity=0.1, line_width=0)
+            fig2.add_hrect(y0=95, y1=150, fillcolor="green", opacity=0.1, line_width=0)
             fig2.add_hrect(y0=85, y1=95, fillcolor="orange", opacity=0.1, line_width=0)
             fig2.add_hrect(y0=0, y1=85, fillcolor="red", opacity=0.1, line_width=0)
 	    
@@ -3258,7 +3258,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
             showlegend=False,
             plot_bgcolor='rgba(0,0,0,0)',
             xaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False),
-            yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, range=[0, 130]),
+            yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, range=[0, 150]),
             title_font_size=14
         )
         
