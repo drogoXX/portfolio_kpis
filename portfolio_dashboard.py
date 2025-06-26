@@ -165,6 +165,115 @@ st.markdown("""
 # UTILITY FUNCTIONS
 # ================================================================================
 
+def calculate_contingency_metrics(work_packages, poc_current=0):
+    """
+    Calculate contingency efficiency metrics for a project
+    
+    Returns dict with:
+    - contingency_as_sold: Original contingency amount
+    - contingency_fct_n1: Previous forecast contingency
+    - contingency_fct_n: Current contingency
+    - consumed_amount: Amount consumed (as_sold - fct_n)
+    - consumed_percentage: Percentage consumed
+    - efficiency: Contingency efficiency score
+    - trend: Consumption trend (accelerating/stable/improving)
+    - status: Status classification
+    """
+    # Find risk contingency work packages
+    risk_contingencies = [
+        wp for wp in work_packages.values() 
+        if 'risk' in wp.get('description', '').lower() and 
+        'contingenc' in wp.get('description', '').lower()
+    ]
+    
+    if not risk_contingencies:
+        return {
+            'has_contingency': False,
+            'contingency_as_sold': 0,
+            'contingency_fct_n1': 0,
+            'contingency_fct_n': 0,
+            'consumed_amount': 0,
+            'consumed_percentage': 0,
+            'efficiency': None,
+            'trend': 'No Contingency',
+            'status': 'N/A',
+            'status_icon': '➖',
+            'status_color': 'info'
+        }
+    
+    # Aggregate contingency values
+    contingency_as_sold = sum(rc.get('as_sold', 0) for rc in risk_contingencies)
+    contingency_fct_n1 = sum(rc.get('fct_n1', 0) for rc in risk_contingencies)
+    contingency_fct_n = sum(rc.get('fct_n', 0) for rc in risk_contingencies)
+    
+    # Calculate consumption
+    consumed_amount = contingency_as_sold - contingency_fct_n
+    consumed_percentage = (consumed_amount / contingency_as_sold * 100) if contingency_as_sold > 0 else 0
+    
+    # Calculate efficiency using the corrected formula
+    if poc_current > 0:
+        efficiency = (2 - (consumed_percentage / poc_current)) * 100
+    else:
+        efficiency = 200  # No progress yet, so no consumption expected
+    
+    # Cap efficiency at reasonable bounds
+    efficiency = max(0, min(200, efficiency))
+    
+    # Calculate trend
+    early_consumption = contingency_as_sold - contingency_fct_n1 if contingency_as_sold > 0 else 0
+    recent_consumption = contingency_fct_n1 - contingency_fct_n if contingency_fct_n1 > 0 else 0
+    
+    if early_consumption > 0 and recent_consumption > early_consumption * 1.2:
+        trend = 'Accelerating'
+        trend_icon = '↗️'
+    elif recent_consumption < early_consumption * 0.8:
+        trend = 'Improving'
+        trend_icon = '↘️'
+    else:
+        trend = 'Stable'
+        trend_icon = '→'
+    
+    # Determine status
+    if efficiency >= 150:
+        status = 'Excellent'
+        status_icon = '🟢'
+        status_color = 'success'
+    elif efficiency >= 120:
+        status = 'Good'
+        status_icon = '🟢'
+        status_color = 'success'
+    elif efficiency >= 80:
+        status = 'On Track'
+        status_icon = '🟦'
+        status_color = 'info'
+    elif efficiency >= 50:
+        status = 'Warning'
+        status_icon = '🟡'
+        status_color = 'warning'
+    else:
+        status = 'Critical'
+        status_icon = '🔴'
+        status_color = 'error'
+    
+    return {
+        'has_contingency': True,
+        'contingency_as_sold': contingency_as_sold,
+        'contingency_fct_n1': contingency_fct_n1,
+        'contingency_fct_n': contingency_fct_n,
+        'consumed_amount': consumed_amount,
+        'consumed_percentage': consumed_percentage,
+        'remaining_amount': contingency_fct_n,
+        'remaining_percentage': (contingency_fct_n / contingency_as_sold * 100) if contingency_as_sold > 0 else 0,
+        'efficiency': efficiency,
+        'trend': trend,
+        'trend_icon': trend_icon,
+        'status': status,
+        'status_icon': status_icon,
+        'status_color': status_color,
+        'early_consumption': early_consumption,
+        'recent_consumption': recent_consumption
+    }
+
 def get_traffic_light_status(value, thresholds, reverse=False):
     """Get traffic light status based on thresholds"""
     if reverse:  # For metrics where lower is better (like cost overruns)
@@ -1097,6 +1206,13 @@ def render_executive_kpi_dashboard(portfolio_summary):
     """Render comprehensive executive-level KPI dashboard"""
     st.markdown("## 🎯 Executive Performance Dashboard")
     
+    # Calculate contingency efficiency for portfolio if not already in summary
+    if 'portfolio_contingency_efficiency' not in portfolio_summary:
+        # This would need to be calculated in create_enhanced_portfolio_summary
+        portfolio_contingency_efficiency = portfolio_summary.get('portfolio_contingency_efficiency', 100)
+    else:
+        portfolio_contingency_efficiency = portfolio_summary['portfolio_contingency_efficiency']
+    
     # Top-level Executive KPIs
     col1, col2, col3, col4, col5 = st.columns(5)
     
@@ -1133,7 +1249,6 @@ def render_executive_kpi_dashboard(portfolio_summary):
     with col3:
         # Cost Performance Index
         avg_cpi = portfolio_summary.get('avg_cost_performance_index', 1.0)
-        # FIX #4: Use CPI thresholds directly (not percentage)
         cpi_icon, cpi_status, cpi_class = get_traffic_light_status(
             avg_cpi, EXECUTIVE_THRESHOLDS['cost_performance_index']
         )
@@ -1162,18 +1277,49 @@ def render_executive_kpi_dashboard(portfolio_summary):
         """, unsafe_allow_html=True)
     
     with col5:
-        # Risk Score
-        avg_risk_score = portfolio_summary.get('average_risk_score', 0)
-        risk_icon = "🟢" if avg_risk_score <= 3 else "🟡" if avg_risk_score <= 6 else "🔴"
-        risk_status = "Low" if avg_risk_score <= 3 else "Medium" if avg_risk_score <= 6 else "High"
-        
-        st.markdown(f"""
-        <div class="executive-kpi traffic-light-{'good' if avg_risk_score <= 3 else 'warning' if avg_risk_score <= 6 else 'critical'}">
-            <h3>Portfolio Risk</h3>
-            <div class="kpi-value">{avg_risk_score:.1f}/10</div>
-            <div class="kpi-trend">{risk_icon} {risk_status} Risk</div>
-        </div>
-        """, unsafe_allow_html=True)
+        # Contingency Efficiency (replacing Risk Score)
+        if portfolio_contingency_efficiency is not None:
+            if portfolio_contingency_efficiency >= 150:
+                cont_icon = "🟢"
+                cont_status = "Excellent"
+                cont_class = "excellent"
+            elif portfolio_contingency_efficiency >= 120:
+                cont_icon = "🟢"
+                cont_status = "Good"
+                cont_class = "good"
+            elif portfolio_contingency_efficiency >= 80:
+                cont_icon = "🟦"
+                cont_status = "On Track"
+                cont_class = "good"
+            elif portfolio_contingency_efficiency >= 50:
+                cont_icon = "🟡"
+                cont_status = "Warning"
+                cont_class = "warning"
+            else:
+                cont_icon = "🔴"
+                cont_status = "Critical"
+                cont_class = "critical"
+            
+            st.markdown(f"""
+            <div class="executive-kpi traffic-light-{cont_class}">
+                <h3>Contingency Efficiency</h3>
+                <div class="kpi-value">{portfolio_contingency_efficiency:.0f}%</div>
+                <div class="kpi-trend status-{cont_class}">{cont_icon} {cont_status}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            # Fallback to Risk Score if no contingency data
+            avg_risk_score = portfolio_summary.get('average_risk_score', 0)
+            risk_icon = "🟢" if avg_risk_score <= 3 else "🟡" if avg_risk_score <= 6 else "🔴"
+            risk_status = "Low" if avg_risk_score <= 3 else "Medium" if avg_risk_score <= 6 else "High"
+            
+            st.markdown(f"""
+            <div class="executive-kpi traffic-light-{'good' if avg_risk_score <= 3 else 'warning' if avg_risk_score <= 6 else 'critical'}">
+                <h3>Portfolio Risk</h3>
+                <div class="kpi-value">{avg_risk_score:.1f}/10</div>
+                <div class="kpi-trend">{risk_icon} {risk_status} Risk</div>
+            </div>
+            """, unsafe_allow_html=True)
 
 def render_enhanced_margin_analysis(portfolio_data):
     """Render enhanced margin analysis with EC/IC breakdown - CLEAN VERSION"""
@@ -1187,6 +1333,12 @@ def render_enhanced_margin_analysis(portfolio_data):
     total_cm2_value_fct_n = 0
     projects_with_margin_data = 0
     
+    # Add contingency tracking
+    total_contingency_as_sold = 0
+    total_contingency_fct_n = 0
+    total_poc_weighted = 0
+    projects_with_contingency = 0
+    
     margin_projects = []
     
     # Process each project
@@ -1195,6 +1347,7 @@ def render_enhanced_margin_analysis(portfolio_data):
             if 'cost_analysis' in project['data']:
                 cost_data = project['data']['cost_analysis']
                 contract_value = safe_get_value(project['data'], 'revenues', 'Contract Price', 'n_ptd')
+                poc_current = safe_get_value(project['data'], 'revenues', 'POC%', 'n_ptd')
                 
                 if contract_value > 0:
                     total_contract += contract_value
@@ -1203,6 +1356,16 @@ def render_enhanced_margin_analysis(portfolio_data):
                     total_cm1_value_fct_n += cost_data.get('cm1_value_fct_n', 0)
                     total_cm2_value_fct_n += cost_data.get('cm2_value_fct_n', 0)
                     projects_with_margin_data += 1
+                    
+                    # Calculate contingency metrics for this project
+                    work_packages = project['data'].get('work_packages', {})
+                    contingency_metrics = calculate_contingency_metrics(work_packages, poc_current)
+                    
+                    if contingency_metrics['has_contingency']:
+                        total_contingency_as_sold += contingency_metrics['contingency_as_sold']
+                        total_contingency_fct_n += contingency_metrics['contingency_fct_n']
+                        total_poc_weighted += poc_current * contract_value
+                        projects_with_contingency += 1
                     
                     margin_projects.append({
                         'project_id': project_id,
@@ -1213,7 +1376,9 @@ def render_enhanced_margin_analysis(portfolio_data):
                         'cm1_pct': cost_data.get('cm1_pct_fct_n', 0),
                         'cm2_pct': cost_data.get('cm2_pct_fct_n', 0),
                         'committed_ratio': cost_data.get('committed_ratio', 0),
-                        'cost_variance_pct': cost_data.get('cost_variance_pct', 0)
+                        'cost_variance_pct': cost_data.get('cost_variance_pct', 0),
+                        'contingency_efficiency': contingency_metrics['efficiency'] if contingency_metrics['has_contingency'] else None,
+                        'contingency_status': contingency_metrics['status_icon'] if contingency_metrics['has_contingency'] else '➖'
                     })
         except Exception as e:
             continue  # Skip problematic projects
@@ -1227,6 +1392,17 @@ def render_enhanced_margin_analysis(portfolio_data):
     portfolio_cm2_pct = (total_cm2_value_fct_n / total_contract * 100) if total_contract > 0 else 0
     portfolio_ec_pct = (total_ec_fct_n / total_contract * 100) if total_contract > 0 else 0
     portfolio_ic_pct = (total_ic_fct_n / total_contract * 100) if total_contract > 0 else 0
+    
+    # Calculate portfolio contingency efficiency
+    portfolio_contingency_consumed = total_contingency_as_sold - total_contingency_fct_n
+    portfolio_contingency_consumed_pct = (portfolio_contingency_consumed / total_contingency_as_sold * 100) if total_contingency_as_sold > 0 else 0
+    portfolio_avg_poc = (total_poc_weighted / total_contract) if total_contract > 0 else 0
+    
+    if portfolio_avg_poc > 0 and total_contingency_as_sold > 0:
+        portfolio_contingency_efficiency = (2 - (portfolio_contingency_consumed_pct / portfolio_avg_poc)) * 100
+        portfolio_contingency_efficiency = max(0, min(200, portfolio_contingency_efficiency))
+    else:
+        portfolio_contingency_efficiency = None
     
     # Display margin analysis cards
     col1, col2, col3 = st.columns(3)
@@ -1264,19 +1440,50 @@ def render_enhanced_margin_analysis(portfolio_data):
         """, unsafe_allow_html=True)
     
     with col3:
-        # Cost Structure Analysis
-        total_cost_pct = portfolio_ec_pct + portfolio_ic_pct
-        efficiency_score = 100 - total_cost_pct
-        
-        st.markdown(f"""
-        <div class="margin-card margin-{'excellent' if efficiency_score > 80 else 'good' if efficiency_score > 70 else 'warning'}">
-            <h4>Cost Efficiency</h4>
-            <h2>{efficiency_score:.1f}%</h2>
-            <p><strong>External:</strong> {format_currency_millions(total_ec_fct_n)} ({portfolio_ec_pct:.1f}%)</p>
-            <p><strong>Internal:</strong> {format_currency_millions(total_ic_fct_n)} ({portfolio_ic_pct:.1f}%)</p>
-            <p><strong>Total Portfolio:</strong> {format_currency_millions(total_contract)}</p>
-        </div>
-        """, unsafe_allow_html=True)
+        # Contingency Efficiency Analysis (replacing Cost Structure)
+        if portfolio_contingency_efficiency is not None:
+            # Determine status for portfolio contingency
+            if portfolio_contingency_efficiency >= 150:
+                cont_class = 'excellent'
+                cont_icon = '🟢'
+                cont_status = 'Excellent'
+            elif portfolio_contingency_efficiency >= 120:
+                cont_class = 'good'
+                cont_icon = '🟢'
+                cont_status = 'Good'
+            elif portfolio_contingency_efficiency >= 80:
+                cont_class = 'good'  # Using 'good' for blue since we don't have 'info' style
+                cont_icon = '🟦'
+                cont_status = 'On Track'
+            elif portfolio_contingency_efficiency >= 50:
+                cont_class = 'warning'
+                cont_icon = '🟡'
+                cont_status = 'Warning'
+            else:
+                cont_class = 'critical'
+                cont_icon = '🔴'
+                cont_status = 'Critical'
+            
+            st.markdown(f"""
+            <div class="margin-card margin-{cont_class}">
+                <h4>Contingency Efficiency</h4>
+                <h2>{portfolio_contingency_efficiency:.0f}% {cont_icon}</h2>
+                <p><strong>Status:</strong> {cont_status}</p>
+                <p><strong>Consumed:</strong> {portfolio_contingency_consumed_pct:.1f}% of {format_currency_millions(total_contingency_as_sold)}</p>
+                <p><strong>Remaining:</strong> {format_currency_millions(total_contingency_fct_n)}</p>
+                <p><strong>Projects with Contingency:</strong> {projects_with_contingency}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="margin-card margin-good">
+                <h4>Contingency Efficiency</h4>
+                <h2>No Data ➖</h2>
+                <p><strong>Status:</strong> No contingency allocated</p>
+                <p><strong>Total Portfolio:</strong> {format_currency_millions(total_contract)}</p>
+                <p><strong>Projects:</strong> {projects_with_margin_data}</p>
+            </div>
+            """, unsafe_allow_html=True)
     
     # Enhanced Margin Analysis Chart
     if margin_projects:
@@ -1286,7 +1493,7 @@ def render_enhanced_margin_analysis(portfolio_data):
         except Exception as e:
             st.warning(f"Chart creation failed: {str(e)}")
     
-    # Simplified project margin performance table
+    # Updated project margin performance table with contingency efficiency
     st.markdown("### 📋 Project Margin Performance")
     
     margin_summary = []
@@ -1295,6 +1502,8 @@ def render_enhanced_margin_analysis(portfolio_data):
             cm2_icon, _, cm2_class = get_traffic_light_status(project['cm2_pct'], EXECUTIVE_THRESHOLDS['cm2_margin'])
             committed_icon, _, _ = get_traffic_light_status(project['committed_ratio'], EXECUTIVE_THRESHOLDS['committed_vs_budget'], reverse=True)
             
+            cont_eff_display = f"{project['contingency_efficiency']:.0f}% {project['contingency_status']}" if project['contingency_efficiency'] is not None else "N/A ➖"
+            
             margin_summary.append({
                 'Project': project['project_id'],
                 'Contract Value': format_currency_millions(project['contract_value']),
@@ -1302,7 +1511,8 @@ def render_enhanced_margin_analysis(portfolio_data):
                 'CM2 %': f"{project['cm2_pct']:.1f}%",
                 'CM2 Status': f"{cm2_icon}",
                 'Cost Variance': f"{project['cost_variance_pct']:+.1f}%",
-                'Committed Ratio': f"{project['committed_ratio']:.2f} {committed_icon}"
+                'Committed Ratio': f"{project['committed_ratio']:.2f} {committed_icon}",
+                'Contingency Eff.': cont_eff_display
             })
         except Exception as e:
             continue  # Skip problematic entries
@@ -3356,7 +3566,12 @@ def create_enhanced_portfolio_summary(portfolio_data):
         'total_ec': 0, 'total_ic': 0,
         'total_committed': 0, 'total_as_sold': 0,
         'valid_projects': 0, 'weighted_poc_n': 0, 'weighted_poc_n1': 0,
-        'total_cpi': 0, 'total_spi': 0, 'total_risk_score': 0
+        'total_cpi': 0, 'total_spi': 0, 'total_risk_score': 0,
+        # Add contingency tracking
+        'total_contingency_as_sold': 0,
+        'total_contingency_fct_n': 0,
+        'weighted_poc_for_contingency': 0,
+        'projects_with_contingency': 0
     }
     
     for project_id, project in portfolio_data.items():
@@ -3380,6 +3595,7 @@ def create_enhanced_portfolio_summary(portfolio_data):
         cost_analysis = data.get('cost_analysis', {})
         earned_value = data.get('earned_value', {})
         risk_factors = data.get('risk_factors', [])
+        work_packages = data.get('work_packages', {})
         
         if contract_n > 0:
             metrics['total_contract_value_n'] += contract_n
@@ -3410,10 +3626,29 @@ def create_enhanced_portfolio_summary(portfolio_data):
                         len([r for r in risk_factors if r['severity'] == 'Medium'])
             metrics['total_risk_score'] += risk_score
             
+            # Calculate contingency metrics
+            contingency_metrics = calculate_contingency_metrics(work_packages, poc_n)
+            if contingency_metrics['has_contingency']:
+                metrics['total_contingency_as_sold'] += contingency_metrics['contingency_as_sold']
+                metrics['total_contingency_fct_n'] += contingency_metrics['contingency_fct_n']
+                metrics['weighted_poc_for_contingency'] += (poc_n * contract_n)
+                metrics['projects_with_contingency'] += 1
+            
             metrics['valid_projects'] += 1
     
     if metrics['valid_projects'] == 0:
         return None
+    
+    # Calculate portfolio contingency efficiency
+    portfolio_contingency_efficiency = None
+    if metrics['projects_with_contingency'] > 0 and metrics['total_contingency_as_sold'] > 0:
+        portfolio_contingency_consumed = metrics['total_contingency_as_sold'] - metrics['total_contingency_fct_n']
+        portfolio_contingency_consumed_pct = (portfolio_contingency_consumed / metrics['total_contingency_as_sold'] * 100)
+        portfolio_avg_poc = (metrics['weighted_poc_for_contingency'] / metrics['total_contract_value_n']) if metrics['total_contract_value_n'] > 0 else 0
+        
+        if portfolio_avg_poc > 0:
+            portfolio_contingency_efficiency = (2 - (portfolio_contingency_consumed_pct / portfolio_avg_poc)) * 100
+            portfolio_contingency_efficiency = max(0, min(200, portfolio_contingency_efficiency))
     
     # Calculate comprehensive portfolio summary
     portfolio_summary = {
@@ -3459,9 +3694,15 @@ def create_enhanced_portfolio_summary(portfolio_data):
         
         # Cash flow efficiency
         'cash_flow_efficiency': (metrics['total_cash_in_n'] / metrics['total_cash_out_n']) if metrics['total_cash_out_n'] > 0 else 1.0,
+        
+        # Contingency metrics
+        'portfolio_contingency_efficiency': portfolio_contingency_efficiency,
+        'total_contingency_as_sold': metrics['total_contingency_as_sold'],
+        'total_contingency_fct_n': metrics['total_contingency_fct_n'],
+        'projects_with_contingency': metrics['projects_with_contingency']
     }
     
-    # FIX #6: Calculate POC velocity using corrected calculation
+    # Calculate POC velocity using corrected calculation
     portfolio_summary['weighted_poc_velocity'] = calculate_poc_velocity(
         portfolio_summary['weighted_poc_n'], 
         portfolio_summary['weighted_poc_n1']
@@ -3658,6 +3899,10 @@ def render_comprehensive_project_metrics(project_data):
     # Enhanced metrics
     cost_analysis = project_data.get('cost_analysis', {})
     earned_value = project_data.get('earned_value', {})
+    work_packages = project_data.get('work_packages', {})
+    
+    # Calculate contingency metrics
+    contingency_metrics = calculate_contingency_metrics(work_packages, poc_n)
     
     # PRIMARY METRICS - Top Row (Most Important)
     st.markdown('<div class="section-header">🎯 Primary Performance Indicators</div>', unsafe_allow_html=True)
@@ -3680,13 +3925,11 @@ def render_comprehensive_project_metrics(project_data):
     with col2:
         cm2_pct = cost_analysis.get('cm2_pct_fct_n', 0)
         cm2_icon, cm2_status, cm2_class = get_traffic_light_status(cm2_pct, EXECUTIVE_THRESHOLDS['cm2_margin'])
-    
-    # Get current thresholds for display
+        
         cm2_excellent = EXECUTIVE_THRESHOLDS['cm2_margin']['excellent']
         cm2_good = EXECUTIVE_THRESHOLDS['cm2_margin']['good']
         cm2_warning = EXECUTIVE_THRESHOLDS['cm2_margin']['warning']
-    
-    # Determine target based on current value
+        
         if cm2_pct >= cm2_excellent:
             target_text = f"Excellent (≥{cm2_excellent}%)"
         elif cm2_pct >= cm2_good:
@@ -3695,7 +3938,7 @@ def render_comprehensive_project_metrics(project_data):
             target_text = f"Target: {cm2_good}%"
         else:
             target_text = f"Min Required: {cm2_warning}%"
-    
+        
         st.markdown(f"""
         <div class="metric-card metric-card-{cm2_class}">
             <div class="metric-label">CM2 Margin</div>
@@ -3709,16 +3952,14 @@ def render_comprehensive_project_metrics(project_data):
     
     with col3:
         poc_velocity = calculate_poc_velocity(poc_n, poc_n1)
-    
-        # Get both raw and maturity-adjusted status
+        
         poc_icon_raw, poc_status_raw, poc_class_raw = get_traffic_light_status(
             poc_velocity, EXECUTIVE_THRESHOLDS['poc_velocity']
         )
         poc_icon_adjusted, poc_status_adjusted, poc_class_adjusted = get_poc_velocity_status_with_maturity(
             poc_velocity, poc_n
         )
-    
-        # Show adjusted status
+        
         st.markdown(f"""
         <div class="metric-card metric-card-{poc_class_adjusted}">
             <div class="metric-label">POC Progress</div>
@@ -3730,42 +3971,30 @@ def render_comprehensive_project_metrics(project_data):
         </div>
         """, unsafe_allow_html=True)
     
-
     with col4:
-    # Overall Health Score (composite metric)
-        cpi = earned_value.get('cost_performance_index', 1.0)
-        spi = earned_value.get('schedule_performance_index', 1.0)
-        poc_velocity = calculate_poc_velocity(poc_n, poc_n1)
-    
-    # Use the new normalized calculation
-        health_score = calculate_project_health_score(cpi, spi, cm2_pct, poc_velocity)
-    
-    # Determine health status
-        if health_score >= 90:
-            health_status = "Excellent"
-            health_class = "excellent"
-            health_icon = "🟢"
-        elif health_score >= 75:
-            health_status = "Good"
-            health_class = "good"
-            health_icon = "🟢"
-        elif health_score >= 60:
-            health_status = "Fair"
-            health_class = "warning"
-            health_icon = "🟡"
+        # Contingency Efficiency
+        if contingency_metrics['has_contingency']:
+            st.markdown(f"""
+            <div class="metric-card metric-card-{contingency_metrics['status_color']}">
+                <div class="metric-label">Contingency Efficiency</div>
+                <div class="primary-metric">{contingency_metrics['efficiency']:.0f}%</div>
+                <div class="metric-trend">{contingency_metrics['status_icon']} {contingency_metrics['status']}</div>
+                <div style="font-size: 0.8rem; color: #666; margin-top: 0.2rem;">
+                    {contingency_metrics['consumed_percentage']:.1f}% consumed
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
         else:
-            health_status = "Needs Attention"
-            health_class = "critical"
-            health_icon = "🔴"
-    
-    # Use ONLY st.metric to match the other metrics
-        st.markdown(f"""
-        <div class="metric-card metric-card-{health_class}">
-            <div class="metric-label">Overall Health</div>
-            <div class="primary-metric">{health_score:.0f}%</div>
-            <div class="metric-trend">{health_icon} {health_status}</div>
-        </div>
-        """, unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Contingency Efficiency</div>
+                <div class="primary-metric">N/A</div>
+                <div class="metric-trend">➖ No Contingency</div>
+                <div style="font-size: 0.8rem; color: #666; margin-top: 0.2rem;">
+                    No risk budget allocated
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
     
     # PERFORMANCE METRICS - Second Row
     st.markdown('<div class="section-header">📊 Performance Metrics</div>', unsafe_allow_html=True)
@@ -3847,36 +4076,26 @@ def render_comprehensive_project_metrics(project_data):
         </div>
         """, unsafe_allow_html=True)
     
-
     with col11:
-        work_packages = project_data.get('work_packages', {})
-    
-        # Fix 3: Separate commodity work packages from risk contingencies
         commodity_wps = [
-        wp for wp in work_packages.values() 
-        if not ('risk' in wp.get('description', '').lower() and 'contingenc' in wp.get('description', '').lower())
+            wp for wp in work_packages.values() 
+            if not ('risk' in wp.get('description', '').lower() and 'contingenc' in wp.get('description', '').lower())
         ]
-    
-        # Count only commodity work packages at risk (excluding risk contingencies)
+        
         wp_at_risk = len([wp for wp in commodity_wps if wp.get('variance_pct', 0) > 15])
-    
-        # Optional: Count risk contingency opportunities
         risk_contingencies = [
             wp for wp in work_packages.values() 
             if 'risk' in wp.get('description', '').lower() and 'contingenc' in wp.get('description', '').lower()
         ]
         wp_opportunities = len([wp for wp in risk_contingencies if wp.get('variance_pct', 0) > 0])
-    
-        # Display total work packages (excluding risk contingencies for cleaner view)
+        
         total_wp_display = len(commodity_wps)
-    
         wp_icon = "🟢" if wp_at_risk == 0 else "🟡" if wp_at_risk <= 2 else "🔴"
-    
-        # Enhanced display with opportunity indicator if applicable
+        
         trend_text = f"{wp_icon} {wp_at_risk} at risk"
         if wp_opportunities > 0:
             trend_text += f" | 💚 {wp_opportunities} opportunities"
-    
+        
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-label">Work Packages</div>
@@ -3884,22 +4103,6 @@ def render_comprehensive_project_metrics(project_data):
             <div class="metric-trend">{trend_text}</div>
         </div>
         """, unsafe_allow_html=True)
-
-#    with col11:
-#        work_packages = project_data.get('work_packages', {})
-#        wp_at_risk = len([
-#        wp for wp in work_packages.values() 
-#        if wp.get('variance_pct', 0) > 15 
-#        and not ('risk' in wp.get('description', '').lower() and 'contingenc' in wp.get('description', '').lower())
-#        ])
-#        wp_icon = "🟢" if wp_at_risk == 0 else "🟡" if wp_at_risk <= 2 else "🔴"
-#        st.markdown(f"""
-#        <div class="metric-card">
-#            <div class="metric-label">Work Packages</div>
-#            <div class="primary-metric" style="font-size: 1.5rem;">{len(work_packages)}</div>
-#            <div class="metric-trend">{wp_icon} {wp_at_risk} at risk</div>
-#        </div>
-#        """, unsafe_allow_html=True)
     
     with col12:
         # Time to completion estimate
@@ -3919,18 +4122,71 @@ def render_comprehensive_project_metrics(project_data):
         </div>
         """, unsafe_allow_html=True)
     
-    # Visual Performance Summary Chart
+    # CONTINGENCY DETAILS - Fourth Row (if applicable)
+    if contingency_metrics['has_contingency']:
+        st.markdown('<div class="section-header">💰 Contingency Management Details</div>', unsafe_allow_html=True)
+        
+        col13, col14, col15, col16 = st.columns(4)
+        
+        with col13:
+            st.metric(
+                "Original Contingency",
+                format_currency_thousands(contingency_metrics['contingency_as_sold']),
+                "Baseline allocation"
+            )
+        
+        with col14:
+            st.metric(
+                "Remaining Contingency",
+                format_currency_thousands(contingency_metrics['remaining_amount']),
+                f"{contingency_metrics['remaining_percentage']:.1f}% of original"
+            )
+        
+        with col15:
+            st.metric(
+                "Consumption Trend",
+                contingency_metrics['trend'],
+                f"{contingency_metrics['trend_icon']} vs previous period"
+            )
+        
+        with col16:
+            # Project when contingency will be depleted
+            if contingency_metrics['recent_consumption'] > 0 and poc_velocity > 0:
+                months_to_depletion = contingency_metrics['remaining_amount'] / (contingency_metrics['recent_consumption'] / 1)  # Assuming monthly
+                depletion_poc = poc_n + (poc_velocity * months_to_depletion)
+                
+                if depletion_poc < 100:
+                    st.metric(
+                        "Depletion Risk",
+                        f"@ {depletion_poc:.0f}% POC",
+                        f"⚠️ In {months_to_depletion:.0f} months"
+                    )
+                else:
+                    st.metric(
+                        "Depletion Risk",
+                        "Low",
+                        "✅ Sufficient to completion"
+                    )
+            else:
+                st.metric(
+                    "Depletion Risk",
+                    "N/A",
+                    "➖ No recent consumption"
+                )
+    
+    # Visual Performance Summary Chart (existing code continues...)
     with st.expander("📊 Performance Trend Visualization", expanded=False):
         fig = go.Figure()
         
         # Create a radar chart for quick performance overview
-        categories = ['Cost Efficiency', 'Schedule', 'Margin', 'Cash Flow', 'Progress']
+        categories = ['Cost Efficiency', 'Schedule', 'Margin', 'Cash Flow', 'Progress', 'Contingency']
         values = [
             cpi * 100,
             spi * 100,
             min(cm2_pct * 5, 100),  # Scale CM2% to 0-100
             min(cash_in_pct / poc_n * 100, 100) if poc_n > 0 else 100,
-            poc_n
+            poc_n,
+            contingency_metrics['efficiency'] if contingency_metrics['has_contingency'] else 100
         ]
         
         fig.add_trace(go.Scatterpolar(
@@ -3944,7 +4200,7 @@ def render_comprehensive_project_metrics(project_data):
         
         # Add target line
         fig.add_trace(go.Scatterpolar(
-            r=[100, 100, 100, 100, 100],
+            r=[100, 100, 100, 100, 100, 100],
             theta=categories,
             name='Target',
             line=dict(color='green', width=1, dash='dash')
