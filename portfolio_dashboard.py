@@ -3214,7 +3214,7 @@ def render_portfolio_revenue_analytics(portfolio_data):
                 size_note = "Bubble size = Quarterly Revenue"
             
             fig2.add_trace(go.Scatter(
-                x=[p['contract_value']/1000000 for p in valid_projects],
+                x=[p['contract_value']/1000 for p in valid_projects],
                 y=[p['quarterly_performance'] for p in valid_projects],
                 mode='markers+text',
                 marker=dict(
@@ -3232,7 +3232,8 @@ def render_portfolio_revenue_analytics(portfolio_data):
                              f'{selected_quarter} Performance: %{{customdata[2]:.1f}}%<br>' +
                              f'{selected_quarter} Actual: CHF %{{customdata[0]:.1f}}K<br>' +
                              f'{selected_quarter} Budget: CHF %{{customdata[1]:.1f}}K<br>' +
-                             f'{size_note}<extra></extra>'
+                             f'{size_note}<extra></extra>',
+                name=''
             ))
             
             # Add reference lines
