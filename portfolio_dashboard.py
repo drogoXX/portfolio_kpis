@@ -3243,12 +3243,10 @@ def render_portfolio_revenue_analytics(portfolio_data):
                           annotation_text="Warning", annotation_position="right")
             
             # Add quadrant shading
-            fig2.add_hrect(y0=95, y1=120, fillcolor="green", opacity=0.1, line_width=0,
-                          annotation_text="On/Above Target", annotation_position="top right")
-            fig2.add_hrect(y0=85, y1=95, fillcolor="orange", opacity=0.1, line_width=0,
-                          annotation_text="Slightly Below", annotation_position="top right")
-            fig2.add_hrect(y0=0, y1=85, fillcolor="red", opacity=0.1, line_width=0,
-                          annotation_text="Significantly Below", annotation_position="top right")
+            fig2.add_hrect(y0=95, y1=120, fillcolor="green", opacity=0.1, line_width=0)
+            fig2.add_hrect(y0=85, y1=95, fillcolor="orange", opacity=0.1, line_width=0)
+            fig2.add_hrect(y0=0, y1=85, fillcolor="red", opacity=0.1, line_width=0)
+	    
         else:
             # No valid projects for this quarter
             st.info(f"No projects with budget data for {selected_quarter}")
