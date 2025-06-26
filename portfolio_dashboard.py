@@ -3184,87 +3184,87 @@ def render_portfolio_revenue_analytics(portfolio_data):
         st.plotly_chart(fig1, use_container_width=True)
     
     with col2:
-    # 2. ENHANCED Quarterly Performance Scatter Plot
-    st.markdown(f"#### 🎯 {selected_quarter} Revenue Performance vs Contract Size")
+        # 2. ENHANCED Quarterly Performance Scatter Plot
+        st.markdown(f"#### 🎯 {selected_quarter} Revenue Performance vs Contract Size")
     
-    fig2 = go.Figure()
+        fig2 = go.Figure()
     
-    # Filter for projects with valid quarterly performance
-    valid_projects = [p for p in project_performance if p['quarterly_performance'] > 0 or p['quarterly_budget'] > 0]
+        # Filter for projects with valid quarterly performance
+        valid_projects = [p for p in project_performance if p['quarterly_performance'] > 0 or p['quarterly_budget'] > 0]
     
-    if valid_projects:
-        performances = [p['quarterly_performance'] for p in valid_projects]
-        colors = ['#00a651' if p >= 95 else '#ff9900' if p >= 85 else '#ee2724' for p in performances]
+        if valid_projects:
+            performances = [p['quarterly_performance'] for p in valid_projects]
+            colors = ['#00a651' if p >= 95 else '#ff9900' if p >= 85 else '#ee2724' for p in performances]
         
-        # Calculate bubble sizes based on quarterly revenue (not contract value)
-        max_q_revenue = max([p['quarterly_actual'] for p in valid_projects]) if valid_projects else 1
+            # Calculate bubble sizes based on quarterly revenue (not contract value)
+            max_q_revenue = max([p['quarterly_actual'] for p in valid_projects]) if valid_projects else 1
         
-        # Prevent division by zero
-        if max_q_revenue == 0:
-            # If all projects have zero actual revenue, use budget for sizing
-            max_q_budget = max([p['quarterly_budget'] for p in valid_projects]) if valid_projects else 1
-            if max_q_budget > 0:
-                bubble_sizes = [max(15, min(50, (p['quarterly_budget']/max_q_budget)*50)) for p in valid_projects]
-                size_note = "Bubble size = Quarterly Budget (no actuals yet)"
+            # Prevent division by zero
+            if max_q_revenue == 0:
+                # If all projects have zero actual revenue, use budget for sizing
+                max_q_budget = max([p['quarterly_budget'] for p in valid_projects]) if valid_projects else 1
+                if max_q_budget > 0:
+                    bubble_sizes = [max(15, min(50, (p['quarterly_budget']/max_q_budget)*50)) for p in valid_projects]
+                    size_note = "Bubble size = Quarterly Budget (no actuals yet)"
+                else:
+                    # If both actual and budget are zero, use uniform size
+                    bubble_sizes = [25 for p in valid_projects]  # Default size
+                    size_note = "Uniform bubble size (no data)"
             else:
-                # If both actual and budget are zero, use uniform size
-                bubble_sizes = [25 for p in valid_projects]  # Default size
-                size_note = "Uniform bubble size (no data)"
+                bubble_sizes = [max(15, min(50, (p['quarterly_actual']/max_q_revenue)*50)) for p in valid_projects]
+                size_note = "Bubble size = Quarterly Revenue"
+        
+            fig2.add_trace(go.Scatter(
+                x=[p['contract_value']/1000000 for p in valid_projects],
+                y=[p['quarterly_performance'] for p in valid_projects],
+                mode='markers+text',
+                marker=dict(
+                    size=bubble_sizes,
+                    color=colors,
+                    opacity=0.7,
+                    line=dict(width=2, color='white')
+                ),
+                text=[p['project_id'] for p in valid_projects],
+                textposition='top center',
+                textfont=dict(size=10),
+                hovertemplate='<b>%{text}</b><br>Contract: CHF %{x:.2f}M<br>' + 
+                             f'{selected_quarter} Performance: %{customdata[2]:.1f}%<br>' +
+                             f'{selected_quarter} Actual: CHF %{customdata[0]:.1f}K<br>' +
+                             f'{selected_quarter} Budget: CHF %{customdata[1]:.1f}K<br>' +
+                             f'{size_note}<extra></extra>',
+                customdata=[[p['quarterly_actual']/1000, p['quarterly_budget']/1000, p['quarterly_performance']] 
+                           for p in valid_projects]
+            ))
+        
+            # Add reference lines
+            fig2.add_hline(y=100, line_dash="dash", line_color="green", 
+                          annotation_text="Target", annotation_position="right")
+            fig2.add_hline(y=90, line_dash="dot", line_color="orange", 
+                          annotation_text="Warning", annotation_position="right")
+        
+            # Add quadrant shading
+            fig2.add_hrect(y0=95, y1=120, fillcolor="green", opacity=0.1, line_width=0,
+                          annotation_text="On/Above Target", annotation_position="top right")
+            fig2.add_hrect(y0=85, y1=95, fillcolor="orange", opacity=0.1, line_width=0,
+                          annotation_text="Slightly Below", annotation_position="top right")
+            fig2.add_hrect(y0=0, y1=85, fillcolor="red", opacity=0.1, line_width=0,
+                          annotation_text="Significantly Below", annotation_position="top right")
         else:
-            bubble_sizes = [max(15, min(50, (p['quarterly_actual']/max_q_revenue)*50)) for p in valid_projects]
-            size_note = "Bubble size = Quarterly Revenue"
-        
-        fig2.add_trace(go.Scatter(
-            x=[p['contract_value']/1000000 for p in valid_projects],
-            y=[p['quarterly_performance'] for p in valid_projects],
-            mode='markers+text',
-            marker=dict(
-                size=bubble_sizes,
-                color=colors,
-                opacity=0.7,
-                line=dict(width=2, color='white')
-            ),
-            text=[p['project_id'] for p in valid_projects],
-            textposition='top center',
-            textfont=dict(size=10),
-            hovertemplate='<b>%{text}</b><br>Contract: CHF %{x:.2f}M<br>' + 
-                         f'{selected_quarter} Performance: %{customdata[2]:.1f}%<br>' +
-                         f'{selected_quarter} Actual: CHF %{customdata[0]:.1f}K<br>' +
-                         f'{selected_quarter} Budget: CHF %{customdata[1]:.1f}K<br>' +
-                         f'{size_note}<extra></extra>',
-            customdata=[[p['quarterly_actual']/1000, p['quarterly_budget']/1000, p['quarterly_performance']] 
-                       for p in valid_projects]
-        ))
-        
-        # Add reference lines
-        fig2.add_hline(y=100, line_dash="dash", line_color="green", 
-                      annotation_text="Target", annotation_position="right")
-        fig2.add_hline(y=90, line_dash="dot", line_color="orange", 
-                      annotation_text="Warning", annotation_position="right")
-        
-        # Add quadrant shading
-        fig2.add_hrect(y0=95, y1=120, fillcolor="green", opacity=0.1, line_width=0,
-                      annotation_text="On/Above Target", annotation_position="top right")
-        fig2.add_hrect(y0=85, y1=95, fillcolor="orange", opacity=0.1, line_width=0,
-                      annotation_text="Slightly Below", annotation_position="top right")
-        fig2.add_hrect(y0=0, y1=85, fillcolor="red", opacity=0.1, line_width=0,
-                      annotation_text="Significantly Below", annotation_position="top right")
-    else:
-        # No valid projects for this quarter
-        st.info(f"No projects with budget data for {selected_quarter}")
+            # No valid projects for this quarter
+            st.info(f"No projects with budget data for {selected_quarter}")
     
-    fig2.update_layout(
-        height=450,
-        xaxis_title='Contract Value (CHF Millions)',
-        yaxis_title=f'{selected_quarter} Revenue Performance %',
-        showlegend=False,
-        plot_bgcolor='rgba(0,0,0,0)',
-        xaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False),
-        yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, range=[0, 120]),
-        title_font_size=14
-    )
+        fig2.update_layout(
+            height=450,
+            xaxis_title='Contract Value (CHF Millions)',
+            yaxis_title=f'{selected_quarter} Revenue Performance %',
+            showlegend=False,
+            plot_bgcolor='rgba(0,0,0,0)',
+            xaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False),
+            yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, range=[0, 120]),
+            title_font_size=14
+        )
     
-    st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, use_container_width=True)
     
     # 3. Enhanced Time Series with quarterly focus
     st.markdown("#### 📈 Portfolio Revenue Trend Analysis")
