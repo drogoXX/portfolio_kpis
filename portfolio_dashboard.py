@@ -34,11 +34,8 @@ EXECUTIVE_THRESHOLDS = {
     'revenue_growth': {'excellent': 15, 'good': 5, 'stable': -2, 'warning': -5, 'critical': -15},
     'committed_vs_budget': {'excellent': 0.9, 'good': 1.0, 'warning': 1.1, 'critical': 1.2},
     'cost_variance': {'excellent': -5, 'good': 5, 'warning': 15, 'critical': 25},
-    'schedule_performance': {'excellent': 110, 'good': 95, 'warning': 80, 'critical': 70},
-    # FIX #4: CPI thresholds (higher is better)
     'cost_performance_index': {'excellent': 1.1, 'good': 1.0, 'warning': 0.9, 'critical': 0.8},
-    # Add SPI thresholds
-    'schedule_performance_index': {'excellent': 1.1, 'good': 1.0, 'warning': 0.9, 'critical': 0.8}
+    'schedule_performance_index': {'excellent': 1.01, 'good': 0.95, 'warning': 0.9, 'critical': 0.8}
 }
 
 # Enhanced Cost Categories
@@ -273,6 +270,31 @@ def calculate_contingency_metrics(work_packages, poc_current=0):
         'early_consumption': early_consumption,
         'recent_consumption': recent_consumption
     }
+
+
+def validate_risk_entry(risk):
+    """Validate and clean a single risk entry"""
+    if risk is None:
+        return None
+    
+    if not isinstance(risk, dict):
+        return None
+    
+    # Required fields
+    required_fields = ['type', 'severity', 'description', 'impact', 'recommendation']
+    
+    # Check if all required fields exist
+    if not all(field in risk for field in required_fields):
+        return None
+    
+    # Create a clean risk entry with guaranteed string values
+    clean_risk = {}
+    for field in required_fields:
+        value = risk.get(field)
+        # Convert to string, handling None values
+        clean_risk[field] = str(value) if value is not None else 'Unknown'
+    
+    return clean_risk
 
 def get_traffic_light_status(value, thresholds, reverse=False):
     """Get traffic light status based on thresholds"""
@@ -1000,18 +1022,30 @@ def assess_project_risks(project_data):
     """Simplified project risk assessment with dynamic thresholds"""
     risk_factors = []
     
+    if not project_data or not isinstance(project_data, dict):
+        return []
+    
     try:
         # Cost and margin risks
         cost_analysis = project_data.get('cost_analysis', {})
-        cm2_pct = cost_analysis.get('cm2_pct_fct_n', 0)
-        committed_ratio = cost_analysis.get('committed_ratio', 0)
-        cost_variance = cost_analysis.get('cost_variance_pct', 0)
+        if not isinstance(cost_analysis, dict):
+            cost_analysis = {}
+            
+        cm2_pct = float(cost_analysis.get('cm2_pct_fct_n', 0) or 0)
+        committed_ratio = float(cost_analysis.get('committed_ratio', 0) or 0)
+        cost_variance = float(cost_analysis.get('cost_variance_pct', 0) or 0)
         
         # Get current CM2 thresholds from EXECUTIVE_THRESHOLDS
-        cm2_excellent = EXECUTIVE_THRESHOLDS['cm2_margin']['excellent']
-        cm2_good = EXECUTIVE_THRESHOLDS['cm2_margin']['good']
-        cm2_warning = EXECUTIVE_THRESHOLDS['cm2_margin']['warning']
-        
+        try:
+            cm2_excellent = float(EXECUTIVE_THRESHOLDS.get('cm2_margin', {}).get('excellent', 15))
+            cm2_good = float(EXECUTIVE_THRESHOLDS.get('cm2_margin', {}).get('good', 10))
+            cm2_warning = float(EXECUTIVE_THRESHOLDS.get('cm2_margin', {}).get('warning', 5))
+        except (TypeError, ValueError):
+            # Use default values if thresholds are invalid
+            cm2_excellent = 15.0
+            cm2_good = 10.0
+            cm2_warning = 5.0
+
         # Margin risks using dynamic thresholds
         if cm2_pct < cm2_warning:  # Below warning threshold is critical
             risk_factors.append({
@@ -1037,9 +1071,8 @@ def assess_project_risks(project_data):
                 'impact': 'Low',
                 'recommendation': 'Continue monitoring and seek margin enhancement opportunities'
             })
-        # If cm2_pct >= cm2_excellent, no margin risk is added
         
-        # Cost commitment risks (keeping existing logic)
+        # Cost commitment risks
         if committed_ratio > 1.2:
             risk_factors.append({
                 'type': 'Cost Commitment',
@@ -1057,7 +1090,7 @@ def assess_project_risks(project_data):
                 'recommendation': 'Enhanced cost monitoring and approval processes'
             })
         
-        # Cost variance risks (keeping existing logic)
+        # Cost variance risks
         if cost_variance > 25:
             risk_factors.append({
                 'type': 'Cost Variance',
@@ -1075,9 +1108,9 @@ def assess_project_risks(project_data):
                 'recommendation': 'Detailed variance analysis and corrective action plan'
             })
         
-        # Schedule and POC risks (keeping existing logic)
-        poc_current = safe_get_value(project_data, 'revenues', 'POC%', 'n_ptd')
-        poc_previous = safe_get_value(project_data, 'revenues', 'POC%', 'n1_ptd')
+        # Schedule and POC risks
+        poc_current = float(safe_get_value(project_data, 'revenues', 'POC%', 'n_ptd') or 0)
+        poc_previous = float(safe_get_value(project_data, 'revenues', 'POC%', 'n1_ptd') or 0)
         poc_velocity = calculate_poc_velocity(poc_current, poc_previous)
         
         if poc_velocity < 2 and poc_current < 90:
@@ -1089,12 +1122,12 @@ def assess_project_risks(project_data):
                 'recommendation': 'Resource reallocation and schedule acceleration'
             })
         
-        # Cash flow risks (keeping existing logic)
+        # Cash flow risks
         quarterly_data = project_data.get('cash_flow_quarterly', {})
-        if quarterly_data:
-            negative_quarters = sum(1 for q in quarterly_data.values() if q['fct_n'] < 0)
+        if quarterly_data and isinstance(quarterly_data, dict):
+            negative_quarters = sum(1 for q in quarterly_data.values() if isinstance(q, dict) and q.get('fct_n', 0) < 0)
             total_quarters = len(quarterly_data)
-            if negative_quarters > total_quarters * 0.3:
+            if total_quarters > 0 and negative_quarters > total_quarters * 0.3:
                 risk_factors.append({
                     'type': 'Cash Flow',
                     'severity': 'High',
@@ -1103,9 +1136,9 @@ def assess_project_risks(project_data):
                     'recommendation': 'Cash flow optimization and milestone acceleration'
                 })
         
-        # Revenue risks (keeping existing logic)
-        revenue_current = safe_get_value(project_data, 'revenues', 'Revenues', 'n_ptd')
-        revenue_previous = safe_get_value(project_data, 'revenues', 'Revenues', 'n1_ptd')
+        # Revenue risks
+        revenue_current = float(safe_get_value(project_data, 'revenues', 'Revenues', 'n_ptd') or 0)
+        revenue_previous = float(safe_get_value(project_data, 'revenues', 'Revenues', 'n1_ptd') or 0)
         revenue_variance = calculate_period_variance(revenue_current, revenue_previous)
         
         if revenue_variance < -15:
@@ -1117,209 +1150,635 @@ def assess_project_risks(project_data):
                 'recommendation': 'Revenue recovery plan and stakeholder engagement'
             })
         
-        # NEW: Risk Contingency Adequacy Assessment (REPLACES Work Package Risk)
+        # Work package risks
         work_packages = project_data.get('work_packages', {})
-        risk_contingencies = [wp for wp in work_packages.values() 
-                             if 'risk' in wp.get('description', '').lower() and 
-                             'contingenc' in wp.get('description', '').lower()]
-        
-        contract_value = safe_get_value(project_data, 'revenues', 'Contract Price', 'n_ptd')
-        
-        if risk_contingencies:
-            # Sum all risk contingency values
-            total_risk_contingency = sum(rc.get('fct_n', 0) for rc in risk_contingencies)
-            contingency_percentage = (total_risk_contingency / contract_value * 100) if contract_value > 0 else 0
+        if work_packages and isinstance(work_packages, dict):
+            high_variance_wps = []
+            for wp in work_packages.values():
+                if isinstance(wp, dict):
+                    variance = wp.get('variance_pct', 0)
+                    description = str(wp.get('description', '')).lower()
+                    if variance > 15 and not ('risk' in description and 'contingenc' in description):
+                        high_variance_wps.append(wp)
             
-            # Check if contingency is being consumed
-            original_contingency = sum(rc.get('as_sold', 0) for rc in risk_contingencies)
-            contingency_consumption = ((original_contingency - total_risk_contingency) / original_contingency * 100) if original_contingency > 0 else 0
-            
-            # Risk Contingency Adequacy Thresholds
-            if contingency_percentage < 1:  # Less than 1% contingency remaining
+            if len(high_variance_wps) > 3:
                 risk_factors.append({
-                    'type': 'Contingency Risk',
-                    'severity': 'Medium',
-                    'description': f'Insufficient risk contingency: {contingency_percentage:.1f}% of contract value',
-                    'impact': 'Medium',
-                    'recommendation': 'Review risk register and consider contingency replenishment'
-                })
-            elif contingency_percentage < 5 and contingency_consumption > 80:  # <5% remaining AND >80% consumed
-                risk_factors.append({
-                    'type': 'Contingency Risk', 
+                    'type': 'Work Package Risk',
                     'severity': 'High',
-                    'description': f'Low contingency: {contingency_percentage:.1f}% remaining, {contingency_consumption:.0f}% consumed',
+                    'description': f'{len(high_variance_wps)} work packages with >15% variance',
                     'impact': 'High',
-                    'recommendation': 'Monitor emerging risks closely, prepare contingency plan'
+                    'recommendation': 'Detailed work package review and corrective actions'
                 })
-
-        else:
-            # No risk contingency found at all
-            risk_factors.append({
-                'type': 'Contingency Risk',
-                'severity': 'High',
-                'description': 'No risk contingency identified in project structure',
-                'impact': 'High',
-                'recommendation': 'Establish risk contingency budget for unforeseen events'
-            })
-        
-        # OPTIONAL: Add Work Package Performance Concentration Risk
-        high_variance_wps = [wp for wp in work_packages.values() 
-                            if wp.get('variance_pct', 0) > 15 and
-                            not ('risk' in wp.get('description', '').lower() and 
-                                 'contingenc' in wp.get('description', '').lower())]
-        
-        if len(work_packages) > 0 and len(high_variance_wps) / len(work_packages) > 0.3:  # >30% of WPs have issues
-            risk_factors.append({
-                'type': 'WP Performance Risk',
-                'severity': 'High',
-                'description': f'{len(high_variance_wps)} of {len(work_packages)} work packages exceeding budget by >15%',
-                'impact': 'High',
-                'recommendation': 'Systemic issue - review estimation or execution processes'
-            })
-        
-        # OPTIONAL: Add Financial Buffer Risk
-        if risk_contingencies and contingency_percentage < 3 and cm2_pct < 10:
-            risk_factors.append({
-                'type': 'Financial Buffer Risk',
-                'severity': 'Critical',
-                'description': f'Low contingency ({contingency_percentage:.1f}%) combined with thin margins ({cm2_pct:.1f}%)',
-                'impact': 'High',
-                'recommendation': 'Project has minimal financial buffer for risks'
-            })
         
     except Exception as e:
-        risk_factors.append({
-            'type': 'Assessment Error',
-            'severity': 'Medium',
-            'description': f'Risk assessment incomplete: {str(e)}',
-            'impact': 'Low',
-            'recommendation': 'Manual risk review recommended'
-        })
+        # Log the error but don't add it as a risk
+        st.warning(f"Risk assessment error: {str(e)}")
     
-    return risk_factors
+    # Validate all risk factors before returning
+    validated_risks = []
+    for risk in risk_factors:
+        validated_risk = validate_risk_entry(risk)
+        if validated_risk:
+            validated_risks.append(validated_risk)
+    
+    return validated_risks
+    
 
 # ================================================================================
 # COMPREHENSIVE DASHBOARD RENDERING FUNCTIONS (SIMPLIFIED)
 # ================================================================================
 
-def render_executive_kpi_dashboard(portfolio_summary):
-    """Render comprehensive executive-level KPI dashboard"""
-    st.markdown("## 🎯 Executive Performance Dashboard")
+def render_unified_executive_dashboard(portfolio_data):
+    """Render unified executive dashboard with 15 comprehensive KPIs"""
+    st.markdown("## 🎯 Executive Portfolio Dashboard")
     
-    # Calculate contingency efficiency for portfolio if not already in summary
-    if 'portfolio_contingency_efficiency' not in portfolio_summary:
-        # This would need to be calculated in create_enhanced_portfolio_summary
-        portfolio_contingency_efficiency = portfolio_summary.get('portfolio_contingency_efficiency', 100)
-    else:
-        portfolio_contingency_efficiency = portfolio_summary['portfolio_contingency_efficiency']
+    # Add professional styling
+    st.markdown("""
+    <style>
+    .dashboard-header {
+        background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+        padding: 2rem;
+        border-radius: 10px;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+    .dashboard-header h2 {
+        color: white;
+        margin: 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+    }
+    .dashboard-subtitle {
+        color: #e8f1ff;
+        margin-top: 0.5rem;
+        font-size: 1.1rem;
+    }
+    .kpi-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        border-left: 4px solid;
+        height: 100%;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .kpi-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+    }
+    .kpi-card-excellent {
+        border-left-color: #28a745;
+        background: linear-gradient(to right, rgba(40,167,69,0.05) 0%, white 100%);
+    }
+    .kpi-card-good {
+        border-left-color: #17a2b8;
+        background: linear-gradient(to right, rgba(23,162,184,0.05) 0%, white 100%);
+    }
+    .kpi-card-warning {
+        border-left-color: #ffc107;
+        background: linear-gradient(to right, rgba(255,193,7,0.05) 0%, white 100%);
+    }
+    .kpi-card-critical {
+        border-left-color: #dc3545;
+        background: linear-gradient(to right, rgba(220,53,69,0.05) 0%, white 100%);
+    }
+    .kpi-label {
+        font-size: 0.9rem;
+        color: #6c757d;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 0.5rem;
+    }
+    .kpi-value {
+        font-size: 2.2rem;
+        font-weight: 700;
+        color: #1e3c72;
+        margin: 0.5rem 0;
+        line-height: 1;
+    }
+    .kpi-subtitle {
+        font-size: 0.85rem;
+        color: #6c757d;
+        margin-top: 0.3rem;
+    }
+    .kpi-trend {
+        font-size: 1rem;
+        font-weight: 600;
+        margin-top: 0.5rem;
+    }
+    .kpi-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        font-size: 0.9rem;
+        font-weight: 600;
+        padding: 0.2rem 0.6rem;
+        border-radius: 20px;
+        margin-top: 0.5rem;
+    }
+    .status-excellent {
+        background: rgba(40,167,69,0.1);
+        color: #28a745;
+    }
+    .status-good {
+        background: rgba(23,162,184,0.1);
+        color: #17a2b8;
+    }
+    .status-warning {
+        background: rgba(255,193,7,0.1);
+        color: #ffc107;
+    }
+    .status-critical {
+        background: rgba(220,53,69,0.1);
+        color: #dc3545;
+    }
+    .row-header {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #2a5298;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin: 1.5rem 0 0.5rem 0;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #e9ecef;
+    }
+    .exec-summary {
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin: 1rem 0;
+        border-left: 4px solid #2F5F8F;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     
-    # Top-level Executive KPIs
+    # Calculate all metrics
+    portfolio_summary = create_enhanced_portfolio_summary(portfolio_data)
+    if not portfolio_summary:
+        st.error("Unable to calculate portfolio metrics")
+        return
+    
+    # Additional calculations for new metrics
+    total_revenue_ptd = 0
+    total_revenue_n1_ptd = 0
+    total_revenue_mtd = 0
+    total_contract_value = 0
+    total_cash_in = 0
+    total_cash_out = 0
+    total_poc_weighted = 0
+    total_cost_variance_weighted = 0
+    total_committed_weighted = 0
+    projects_at_risk = 0
+    total_projects = 0
+    
+    for project_id, project in portfolio_data.items():
+        data = project['data']
+        if data:
+            contract_value = safe_get_value(data, 'revenues', 'Contract Price', 'n_ptd')
+            revenue_ptd = safe_get_value(data, 'revenues', 'Revenues', 'n_ptd')
+            revenue_n1_ptd = safe_get_value(data, 'revenues', 'Revenues', 'n1_ptd')
+            revenue_mtd = safe_get_value(data, 'revenues', 'Revenues', 'n_mtd')
+            poc = safe_get_value(data, 'revenues', 'POC%', 'n_ptd')
+            cash_in = safe_get_value(data, 'revenues', 'Cash IN', 'n_ptd')
+            cash_out = safe_get_value(data, 'revenues', 'Cash OUT', 'n_ptd')
+            
+            if contract_value > 0:
+                total_contract_value += contract_value
+                total_revenue_ptd += revenue_ptd
+                total_revenue_n1_ptd += revenue_n1_ptd
+                total_revenue_mtd += revenue_mtd
+                total_cash_in += cash_in
+                total_cash_out += cash_out
+                total_poc_weighted += poc * contract_value
+                
+                # Cost analysis
+                cost_analysis = data.get('cost_analysis', {})
+                cost_variance = cost_analysis.get('cost_variance_pct', 0)
+                committed_ratio = cost_analysis.get('committed_ratio', 0)
+                total_cost_variance_weighted += cost_variance * contract_value
+                total_committed_weighted += committed_ratio * contract_value
+                
+                # Risk assessment
+                risk_factors = data.get('risk_factors', [])
+                high_risk_count = len([r for r in risk_factors if r.get('severity') in ['Critical', 'High']])
+                if high_risk_count > 0:
+                    projects_at_risk += 1
+                
+                total_projects += 1
+    
+    # Calculate new primary KPIs
+    revenue_recognition_efficiency = 0
+    if total_contract_value > 0 and total_poc_weighted > 0:
+        expected_revenue = total_contract_value * (total_poc_weighted / total_contract_value / 100)
+        if expected_revenue > 0:
+            revenue_recognition_efficiency = (total_revenue_ptd / expected_revenue) * 100
+    
+    net_cash_flow = total_cash_in - total_cash_out
+    contract_backlog = total_contract_value - total_revenue_ptd
+    cash_conversion_ratio = (total_cash_in / total_revenue_ptd * 100) if total_revenue_ptd > 0 else 0
+    
+    # Calculate additional metrics
+    portfolio_cost_variance = (total_cost_variance_weighted / total_contract_value) if total_contract_value > 0 else 0
+    portfolio_committed_ratio = (total_committed_weighted / total_contract_value) if total_contract_value > 0 else 0
+    
+    # Get margin metrics from portfolio summary
+    cm1_pct = portfolio_summary.get('avg_cm1_pct', 0)
+    cm2_pct = portfolio_summary.get('avg_cm2_pct', 0)
+    avg_cpi = portfolio_summary.get('avg_cost_performance_index', 1.0)
+    avg_spi = portfolio_summary.get('avg_schedule_performance_index', 1.0)
+    poc_velocity = portfolio_summary.get('weighted_poc_velocity', 0)
+    avg_risk_score = portfolio_summary.get('average_risk_score', 0)
+    
+    # Display current date and time for context
+    st.markdown(f"""
+    <div style="text-align: right; color: #6c757d; font-size: 0.9rem; margin-bottom: 1rem;">
+        Dashboard Updated: {datetime.datetime.now().strftime('%B %d, %Y at %H:%M')}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # ROW 1: Primary Financial KPIs
+    st.markdown('<div class="row-header">📊 PRIMARY FINANCIAL INDICATORS</div>', unsafe_allow_html=True)
+    
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        # Portfolio Value KPI
-        contract_var = portfolio_summary.get('contract_variance', 0)
-        value_icon, value_status, value_class = get_traffic_light_status(
-            contract_var, EXECUTIVE_THRESHOLDS['revenue_growth']
-        )
+        # Portfolio Value
+        value_variance = portfolio_summary.get('contract_variance', 0)
+        trend_color = "#28a745" if value_variance >= 0 else "#dc3545"
+        trend_icon = "↑" if value_variance >= 0 else "↓"
         
         st.markdown(f"""
-        <div class="executive-kpi traffic-light-{value_class}">
-            <h3>Portfolio Value</h3>
-            <div class="kpi-value">{format_currency_millions(portfolio_summary['total_contract_value'])}</div>
-            <div class="kpi-trend status-{value_class}">{value_icon} {value_status} ({contract_var:+.1f}%)</div>
+        <div class="kpi-card kpi-card-{'excellent' if value_variance >= 0 else 'warning'}">
+            <div class="kpi-label">Portfolio Value</div>
+            <div class="kpi-value">{format_currency_millions(total_contract_value)}</div>
+            <div class="kpi-subtitle">{len(portfolio_data)} Active Projects</div>
+            <div class="kpi-trend" style="color: {trend_color};">
+                {trend_icon} {value_variance:+.1f}% vs Previous
+            </div>
         </div>
         """, unsafe_allow_html=True)
     
     with col2:
-        # CM2 Margin KPI
-        avg_cm2 = portfolio_summary.get('avg_cm2_pct', 0)
-        cm2_icon, cm2_status, cm2_class = get_traffic_light_status(
-            avg_cm2, EXECUTIVE_THRESHOLDS['cm2_margin']
-        )
+        # Revenue Recognition Efficiency
+        rre_status = "excellent" if revenue_recognition_efficiency >= 95 else "good" if revenue_recognition_efficiency >= 85 else "warning" if revenue_recognition_efficiency >= 75 else "critical"
+        rre_icon = "✓" if revenue_recognition_efficiency >= 95 else "!" if revenue_recognition_efficiency < 85 else "-"
         
         st.markdown(f"""
-        <div class="executive-kpi traffic-light-{cm2_class}">
-            <h3>CM2 Margin</h3>
-            <div class="kpi-value">{avg_cm2:.1f}%</div>
-            <div class="kpi-trend status-{cm2_class}">{cm2_icon} {cm2_status}</div>
+        <div class="kpi-card kpi-card-{rre_status}">
+            <div class="kpi-label">Revenue Recognition</div>
+            <div class="kpi-value">{revenue_recognition_efficiency:.1f}%</div>
+            <div class="kpi-subtitle">vs Expected: {format_currency_millions(expected_revenue if 'expected_revenue' in locals() else 0)}</div>
+            <div class="kpi-status status-{rre_status}">
+                {rre_icon} {'Efficient' if revenue_recognition_efficiency >= 95 else 'Below Target' if revenue_recognition_efficiency >= 85 else 'Needs Review'}
+            </div>
         </div>
         """, unsafe_allow_html=True)
     
     with col3:
-        # Cost Performance Index
-        avg_cpi = portfolio_summary.get('avg_cost_performance_index', 1.0)
-        cpi_icon, cpi_status, cpi_class = get_traffic_light_status(
-            avg_cpi, EXECUTIVE_THRESHOLDS['cost_performance_index']
-        )
+        # Net Cash Flow
+        ncf_status = "excellent" if net_cash_flow > 0 else "warning" if net_cash_flow > -total_revenue_ptd*0.05 else "critical"
+        ncf_icon = "+" if net_cash_flow > 0 else "-"
         
         st.markdown(f"""
-        <div class="executive-kpi traffic-light-{cpi_class}">
-            <h3>Cost Performance</h3>
-            <div class="kpi-value">{avg_cpi:.2f}</div>
-            <div class="kpi-trend status-{cpi_class}">{cpi_icon} {cpi_status}</div>
+        <div class="kpi-card kpi-card-{ncf_status}">
+            <div class="kpi-label">Net Cash Flow</div>
+            <div class="kpi-value">{format_currency_millions(abs(net_cash_flow))}</div>
+            <div class="kpi-subtitle">IN: {format_currency_millions(total_cash_in)} | OUT: {format_currency_millions(total_cash_out)}</div>
+            <div class="kpi-status status-{ncf_status}">
+                {ncf_icon} {'Positive' if net_cash_flow > 0 else 'Negative'} Flow
+            </div>
         </div>
         """, unsafe_allow_html=True)
     
     with col4:
-        # POC Velocity
-        poc_velocity = portfolio_summary.get('weighted_poc_velocity', 0)
-        poc_icon, poc_status, poc_class = get_traffic_light_status(
-            poc_velocity, EXECUTIVE_THRESHOLDS['poc_velocity']
-        )
-        
+    # Contract Backlog - UPDATED CALCULATION USING POC VELOCITY
+   
+    # Calculate weighted average POC across portfolio
+        weighted_avg_poc = (total_poc_weighted / total_contract_value) if total_contract_value > 0 else 0
+    
+    # Use portfolio POC velocity (already calculated in portfolio_summary)
+        monthly_poc_velocity = poc_velocity  # This is already in %/month from portfolio_summary
+    
+    # Calculate months to complete based on POC velocity
+        if monthly_poc_velocity > 0:
+            months_to_complete = (100 - weighted_avg_poc) / monthly_poc_velocity
+            months_of_backlog = months_to_complete
+        else:
+            months_of_backlog = 0  # No velocity means infinite time to complete
+    
+    # Determine status based on completion timeline
+        backlog_status = "excellent" if months_of_backlog > 12 else "good" if months_of_backlog > 6 else "warning" if months_of_backlog > 3 else "critical"
+    
         st.markdown(f"""
-        <div class="executive-kpi traffic-light-{poc_class}">
-            <h3>POC Velocity</h3>
-            <div class="kpi-value">{poc_velocity:.1f}%/mo</div>
-            <div class="kpi-trend status-{poc_class}">{poc_icon} {poc_status}</div>
+        <div class="kpi-card kpi-card-{backlog_status}">
+            <div class="kpi-label">Contract Backlog</div>
+            <div class="kpi-value">{format_currency_millions(contract_backlog)}</div>
+            <div class="kpi-subtitle">{months_of_backlog:.1f} Months to Complete @ {monthly_poc_velocity:.1f}%/mo</div>
+            <div class="kpi-status status-{backlog_status}">
+                {'Strong' if months_of_backlog > 12 else 'Adequate' if months_of_backlog > 6 else 'Low' if months_of_backlog > 3 else 'Critical'} Pipeline
+            </div>
         </div>
         """, unsafe_allow_html=True)
     
     with col5:
-        # Contingency Efficiency (replacing Risk Score)
-        if portfolio_contingency_efficiency is not None:
-            if portfolio_contingency_efficiency >= 150:
-                cont_icon = "🟢"
-                cont_status = "Excellent"
-                cont_class = "excellent"
-            elif portfolio_contingency_efficiency >= 120:
-                cont_icon = "🟢"
-                cont_status = "Good"
-                cont_class = "good"
-            elif portfolio_contingency_efficiency >= 80:
-                cont_icon = "🟦"
-                cont_status = "On Track"
-                cont_class = "good"
-            elif portfolio_contingency_efficiency >= 50:
-                cont_icon = "🟡"
-                cont_status = "Warning"
-                cont_class = "warning"
+        # Cash Conversion Ratio
+        ccr_status = "excellent" if 95 <= cash_conversion_ratio <= 105 else "good" if 85 <= cash_conversion_ratio <= 115 else "warning" if 75 <= cash_conversion_ratio <= 125 else "critical"
+        
+        st.markdown(f"""
+        <div class="kpi-card kpi-card-{ccr_status}">
+            <div class="kpi-label">Cash Conversion</div>
+            <div class="kpi-value">{cash_conversion_ratio:.1f}%</div>
+            <div class="kpi-subtitle">Cash IN vs Revenue</div>
+            <div class="kpi-status status-{ccr_status}">
+                {'Optimal' if 95 <= cash_conversion_ratio <= 105 else 'Good' if 85 <= cash_conversion_ratio <= 115 else 'Lagging' if cash_conversion_ratio < 85 else 'Advance'}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # ROW 2: Performance Indicators
+    st.markdown('<div class="row-header">📈 PERFORMANCE INDICATORS</div>', unsafe_allow_html=True)
+    
+    col6, col7, col8, col9, col10 = st.columns(5)
+    
+    with col6:
+        # CM1 Margin
+        cm1_value = portfolio_summary.get('total_cm1', 0)
+        cm1_status = "excellent" if cm1_pct >= 30 else "good" if cm1_pct >= 25 else "warning" if cm1_pct >= 20 else "critical"
+        
+        st.markdown(f"""
+        <div class="kpi-card kpi-card-{cm1_status}">
+            <div class="kpi-label">CM1 Margin</div>
+            <div class="kpi-value">{cm1_pct:.1f}%</div>
+            <div class="kpi-subtitle">Value: {format_currency_millions(cm1_value)}</div>
+            <div class="kpi-status status-{cm1_status}">
+                After External Costs
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col7:
+        # CM2 Margin
+        cm2_value = portfolio_summary.get('total_cm2', 0)
+        cm2_icon, cm2_text, cm2_status = get_traffic_light_status(cm2_pct, EXECUTIVE_THRESHOLDS['cm2_margin'])
+        
+        st.markdown(f"""
+        <div class="kpi-card kpi-card-{cm2_status}">
+            <div class="kpi-label">CM2 Margin</div>
+            <div class="kpi-value">{cm2_pct:.1f}%</div>
+            <div class="kpi-subtitle">Value: {format_currency_millions(cm2_value)}</div>
+            <div class="kpi-status status-{cm2_status}">
+                {cm2_icon} {cm2_text}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col8:
+        # Cost Performance Index
+        cpi_icon, cpi_text, cpi_status = get_traffic_light_status(avg_cpi, EXECUTIVE_THRESHOLDS['cost_performance_index'])
+        
+        st.markdown(f"""
+        <div class="kpi-card kpi-card-{cpi_status}">
+            <div class="kpi-label">Cost Performance (CPI)</div>
+            <div class="kpi-value">{avg_cpi:.2f}</div>
+            <div class="kpi-subtitle">{'Under Budget' if avg_cpi > 1 else 'Over Budget' if avg_cpi < 1 else 'On Budget'}</div>
+            <div class="kpi-status status-{cpi_status}">
+                {cpi_icon} {cpi_text}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col9:
+        # Schedule Performance Index
+        spi_icon, spi_text, spi_status = get_traffic_light_status(avg_spi, EXECUTIVE_THRESHOLDS['schedule_performance_index'])
+        
+        st.markdown(f"""
+        <div class="kpi-card kpi-card-{spi_status}">
+            <div class="kpi-label">Schedule Performance (SPI)</div>
+            <div class="kpi-value">{avg_spi:.2f}</div>
+            <div class="kpi-subtitle">{'Ahead of Schedule' if avg_spi > 1.05 else 'On Schedule' if avg_spi >= 0.95 else 'Behind Schedule'}</div>
+            <div class="kpi-status status-{spi_status}">
+                {spi_icon} {spi_text}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col10:
+        # POC Velocity
+        poc_icon, poc_text, poc_status = get_traffic_light_status(poc_velocity, EXECUTIVE_THRESHOLDS['poc_velocity'])
+        
+        st.markdown(f"""
+        <div class="kpi-card kpi-card-{poc_status}">
+            <div class="kpi-label">POC Velocity</div>
+            <div class="kpi-value">{poc_velocity:.1f}%/mo</div>
+            <div class="kpi-subtitle">Progress Rate</div>
+            <div class="kpi-status status-{poc_status}">
+                {poc_icon} {poc_text}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # ROW 3: Risk & Efficiency Metrics
+    st.markdown('<div class="row-header">⚠️ RISK & EFFICIENCY METRICS</div>', unsafe_allow_html=True)
+    
+    col11, col12, col13, col14, col15 = st.columns(5)
+    
+    with col11:
+        # Contingency Efficiency
+        cont_eff = portfolio_summary.get('portfolio_contingency_efficiency', None)
+        if cont_eff is not None:
+            cont_consumed = ((portfolio_summary.get('total_contingency_as_sold', 0) - 
+                            portfolio_summary.get('total_contingency_fct_n', 0)) / 
+                           portfolio_summary.get('total_contingency_as_sold', 1) * 100)
+            
+            if cont_eff >= 150:
+                cont_status = "excellent"
+                cont_text = "Excellent"
+            elif cont_eff >= 120:
+                cont_status = "good"
+                cont_text = "Good"
+            elif cont_eff >= 80:
+                cont_status = "warning"
+                cont_text = "On Track"
             else:
-                cont_icon = "🔴"
-                cont_status = "Critical"
-                cont_class = "critical"
+                cont_status = "critical"
+                cont_text = "Critical"
             
             st.markdown(f"""
-            <div class="executive-kpi traffic-light-{cont_class}">
-                <h3>Contingency Efficiency</h3>
-                <div class="kpi-value">{portfolio_contingency_efficiency:.0f}%</div>
-                <div class="kpi-trend status-{cont_class}">{cont_icon} {cont_status}</div>
+            <div class="kpi-card kpi-card-{cont_status}">
+                <div class="kpi-label">Contingency Efficiency</div>
+                <div class="kpi-value">{cont_eff:.0f}%</div>
+                <div class="kpi-subtitle">Consumed: {cont_consumed:.1f}% | {format_currency_millions(portfolio_summary.get('total_contingency_fct_n', 0))} left</div>
+                <div class="kpi-status status-{cont_status}">
+                    {cont_text}
+                </div>
             </div>
             """, unsafe_allow_html=True)
         else:
-            # Fallback to Risk Score if no contingency data
-            avg_risk_score = portfolio_summary.get('average_risk_score', 0)
-            risk_icon = "🟢" if avg_risk_score <= 3 else "🟡" if avg_risk_score <= 6 else "🔴"
-            risk_status = "Low" if avg_risk_score <= 3 else "Medium" if avg_risk_score <= 6 else "High"
-            
             st.markdown(f"""
-            <div class="executive-kpi traffic-light-{'good' if avg_risk_score <= 3 else 'warning' if avg_risk_score <= 6 else 'critical'}">
-                <h3>Portfolio Risk</h3>
-                <div class="kpi-value">{avg_risk_score:.1f}/10</div>
-                <div class="kpi-trend">{risk_icon} {risk_status} Risk</div>
+            <div class="kpi-card">
+                <div class="kpi-label">Contingency Efficiency</div>
+                <div class="kpi-value">N/A</div>
+                <div class="kpi-subtitle">No contingency data</div>
+                <div class="kpi-status">No Data</div>
             </div>
             """, unsafe_allow_html=True)
+    
+    with col12:
+        # Portfolio Risk Score
+        risk_status = "excellent" if avg_risk_score <= 3 else "warning" if avg_risk_score <= 6 else "critical"
+        risk_level = "Low" if avg_risk_score <= 3 else "Medium" if avg_risk_score <= 6 else "High"
+        
+        st.markdown(f"""
+        <div class="kpi-card kpi-card-{risk_status}">
+            <div class="kpi-label">Portfolio Risk Score</div>
+            <div class="kpi-value">{avg_risk_score:.1f}/10</div>
+            <div class="kpi-subtitle">{risk_level} Risk Level</div>
+            <div class="kpi-status status-{risk_status}">
+                {'Well Managed' if avg_risk_score <= 3 else 'Monitor Closely' if avg_risk_score <= 6 else 'Action Required'}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col13:
+        # Projects at Risk
+        risk_percentage = (projects_at_risk / total_projects * 100) if total_projects > 0 else 0
+        par_status = "excellent" if risk_percentage <= 10 else "warning" if risk_percentage <= 25 else "critical"
+        
+        st.markdown(f"""
+        <div class="kpi-card kpi-card-{par_status}">
+            <div class="kpi-label">Projects at Risk</div>
+            <div class="kpi-value">{projects_at_risk} of {total_projects}</div>
+            <div class="kpi-subtitle">{risk_percentage:.1f}% of Portfolio</div>
+            <div class="kpi-status status-{par_status}">
+                {'Low Risk' if risk_percentage <= 10 else 'Moderate Risk' if risk_percentage <= 25 else 'High Risk'}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col14:
+        # Cost Variance
+        cv_status = "excellent" if abs(portfolio_cost_variance) <= 5 else "good" if abs(portfolio_cost_variance) <= 10 else "warning" if abs(portfolio_cost_variance) <= 20 else "critical"
+        cv_direction = "Over" if portfolio_cost_variance > 0 else "Under" if portfolio_cost_variance < 0 else "On"
+        
+        st.markdown(f"""
+        <div class="kpi-card kpi-card-{cv_status}">
+            <div class="kpi-label">Cost Variance</div>
+            <div class="kpi-value">{portfolio_cost_variance:+.1f}%</div>
+            <div class="kpi-subtitle">{cv_direction} Budget</div>
+            <div class="kpi-status status-{cv_status}">
+                {'Controlled' if abs(portfolio_cost_variance) <= 10 else 'Monitor' if abs(portfolio_cost_variance) <= 20 else 'Action Needed'}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col15:
+        # Committed Ratio
+        cr_icon, cr_text, cr_status = get_traffic_light_status(portfolio_committed_ratio, EXECUTIVE_THRESHOLDS['committed_vs_budget'], reverse=True)
+        
+        st.markdown(f"""
+        <div class="kpi-card kpi-card-{cr_status}">
+            <div class="kpi-label">Committed Ratio</div>
+            <div class="kpi-value">{portfolio_committed_ratio:.2f}</div>
+            <div class="kpi-subtitle">{'Within Budget' if portfolio_committed_ratio <= 1.0 else 'Over-committed'}</div>
+            <div class="kpi-status status-{cr_status}">
+                {cr_icon} {cr_text}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Add a summary insights section
+    st.markdown("---")
+    st.markdown("### 💡 Executive Summary")
+    
+    col_summary1, col_summary2, col_summary3 = st.columns(3)
+    
+    with col_summary1:
+        # Build strengths list
+        strengths = []
+        if cm2_pct >= EXECUTIVE_THRESHOLDS['cm2_margin']['good']:
+            strengths.append(f"Strong margins: CM2 at {cm2_pct:.1f}%")
+        if avg_cpi >= 1.0:
+            strengths.append(f"Excellent cost control: CPI {avg_cpi:.2f}")
+        if net_cash_flow > 0:
+            strengths.append(f"Positive cash flow: {format_currency_millions(net_cash_flow)}")
+        if months_of_backlog > 12:
+            strengths.append(f"Strong pipeline: {months_of_backlog:.1f} months")
+        if risk_percentage <= 10:
+            strengths.append(f"Low risk exposure: {risk_percentage:.0f}% at risk")
+        
+        # If no strengths, add a default message
+        if not strengths:
+            strengths.append("Building momentum across key metrics")
+        
+        strengths_html = ''.join([f'<li>{s}</li>' for s in strengths])
+        
+        st.markdown(f"""
+        <div class="exec-summary">
+            <h4>🏆 Portfolio Strengths</h4>
+            <ul>
+                {strengths_html}
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_summary2:
+        # Build concerns list
+        concerns = []
+        if cm2_pct < EXECUTIVE_THRESHOLDS['cm2_margin']['good']:
+            concerns.append(f"Margin pressure: CM2 below {EXECUTIVE_THRESHOLDS['cm2_margin']['good']}%")
+        if avg_cpi < 1.0:
+            concerns.append(f"Cost overruns: CPI at {avg_cpi:.2f}")
+        if net_cash_flow < 0:
+            concerns.append(f"Negative cash flow: {format_currency_millions(net_cash_flow)}")
+        if months_of_backlog < 6:
+            concerns.append(f"Low backlog: Only {months_of_backlog:.1f} months")
+        if projects_at_risk > total_projects * 0.25:
+            concerns.append(f"High risk projects: {projects_at_risk} projects")
+        
+        # If no concerns, add a positive message
+        if not concerns:
+            concerns.append("No significant concerns identified")
+        
+        concerns_html = ''.join([f'<li>{c}</li>' for c in concerns])
+        
+        st.markdown(f"""
+        <div class="exec-summary">
+            <h4>⚠️ Areas of Concern</h4>
+            <ul>
+                {concerns_html}
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_summary3:
+        # Calculate portfolio health score
+        health_components = [
+            1 if cm2_pct >= EXECUTIVE_THRESHOLDS['cm2_margin']['good'] else 0.5 if cm2_pct >= EXECUTIVE_THRESHOLDS['cm2_margin']['warning'] else 0,
+            1 if avg_cpi >= 1.0 else 0.5 if avg_cpi >= 0.9 else 0,
+            1 if net_cash_flow > 0 else 0.5 if net_cash_flow > -total_revenue_ptd*0.05 else 0,
+            1 if risk_percentage <= 10 else 0.5 if risk_percentage <= 25 else 0,
+            1 if revenue_recognition_efficiency >= 95 else 0.5 if revenue_recognition_efficiency >= 85 else 0
+        ]
+        health_score = (sum(health_components) / len(health_components)) * 100
+        
+        health_status = "Excellent" if health_score >= 80 else "Good" if health_score >= 60 else "Fair" if health_score >= 40 else "Poor"
+        health_color = "#28a745" if health_score >= 80 else "#17a2b8" if health_score >= 60 else "#ffc107" if health_score >= 40 else "#dc3545"
+        
+        st.markdown(f"""
+        <div class="exec-summary">
+            <h4>📊 Overall Portfolio Health</h4>
+            <div style="text-align: center; margin: 1rem 0;">
+                <div style="font-size: 3rem; font-weight: 700; color: {health_color};">{health_score:.0f}%</div>
+                <div style="font-size: 1.2rem; color: {health_color}; font-weight: 600;">{health_status}</div>
+            </div>
+            <div style="margin-top: 1rem;">
+                <div style="background: #e9ecef; border-radius: 10px; height: 20px; overflow: hidden;">
+                    <div style="background: {health_color}; width: {health_score}%; height: 100%; transition: width 0.5s;"></div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 def render_enhanced_margin_analysis(portfolio_data):
     """Render enhanced margin analysis with EC/IC breakdown - CLEAN VERSION"""
@@ -4161,14 +4620,26 @@ def render_comprehensive_project_metrics(project_data):
     with col7:
         spi = earned_value.get('schedule_performance_index', 1.0)
         spi_icon, _, spi_class = get_traffic_light_status(spi, EXECUTIVE_THRESHOLDS['schedule_performance_index'])
+        
+        if spi > 1.05:
+            schedule_status = "Ahead of Schedule"
+        elif spi >= 0.95:
+            schedule_status = "On Schedule"
+        elif spi >= 0.9:
+            schedule_status = "Slightly Behind"
+        else:
+            schedule_status = "Behind Schedule"
+
         st.markdown(f"""
         <div class="metric-card metric-card-{spi_class}">
             <div class="metric-label">Schedule Performance (SPI)</div>
             <div class="primary-metric" style="font-size: 1.5rem;">{spi:.2f}</div>
-            <div class="metric-trend">{spi_icon} {'On Time' if spi >= 1.0 else 'Behind Schedule'}</div>
+            <div class="metric-trend">{spi_icon} {schedule_status}</div>
+
+                               
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col8:
         cash_in_pct = safe_get_value(project_data, 'revenues', 'Cash In %', 'n_ptd')
         cash_icon = "🟢" if cash_in_pct >= poc_n else "🟡" if cash_in_pct >= poc_n * 0.8 else "🔴"
@@ -4987,30 +5458,38 @@ def render_project_risk_assessment(project_data):
         st.warning("⚠️ Unable to load risk assessment data.")
         return
     
-    # Safely get risk_factors with proper error handling
-    risk_factors = project_data.get('risk_factors', [])
-    
-    # Debug option (optional - can be removed in production)
-    with st.expander("🔍 Risk Assessment Debug", expanded=False):
-        st.write(f"Total risk factors in data: {len(risk_factors)}")
-        if st.checkbox("Show raw risk data", value=False, key="risk_debug_checkbox"):
-            st.json(risk_factors)
+    # Safely get risk_factors
+    try:
+        risk_factors = project_data.get('risk_factors', [])
+    except Exception:
+        risk_factors = []
     
     # Ensure risk_factors is a list
     if not isinstance(risk_factors, list):
         risk_factors = []
     
-    if not risk_factors or len(risk_factors) == 0:
+    # Filter out None values and validate each risk
+    valid_risks = []
+    for risk in risk_factors:
+        if risk is not None and isinstance(risk, dict):
+            # Double-check that it has the required structure
+            if all(key in risk for key in ['type', 'severity', 'description', 'impact', 'recommendation']):
+                valid_risks.append(risk)
+    
+    if not valid_risks:
         st.success("✅ No significant risk factors identified.")
         return
     
     # Risk summary
     risk_counts = {'Critical': 0, 'High': 0, 'Medium': 0, 'Low': 0}
-    for risk in risk_factors:
-        if isinstance(risk, dict) and 'severity' in risk:
-            severity = risk.get('severity', 'Low')
+    
+    for risk in valid_risks:
+        try:
+            severity = str(risk.get('severity', 'Low'))
             if severity in risk_counts:
                 risk_counts[severity] += 1
+        except Exception:
+            continue
     
     # Display risk count cards
     cols = st.columns(4)
@@ -5035,30 +5514,60 @@ def render_project_risk_assessment(project_data):
     st.markdown("### 📋 Risk Register")
     
     risk_details = []
-    for i, risk in enumerate(risk_factors):
-        if isinstance(risk, dict):
-            severity = risk.get('severity', 'Unknown')
-            severity_icon = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🟢"}.get(severity, "⚪")
-            impact = risk.get('impact', 'Unknown')
-            impact_icon = {"High": "⚡", "Medium": "⚡", "Low": "💧"}.get(impact, "💧")
+    
+    for risk in valid_risks:
+        try:
+            # Extract values safely
+            risk_type = str(risk.get('type', 'Unknown'))
+            severity = str(risk.get('severity', 'Unknown'))
+            impact = str(risk.get('impact', 'Unknown'))
+            description = str(risk.get('description', 'No description'))
+            recommendation = str(risk.get('recommendation', 'No recommendation'))
+            
+            # Get icons
+            severity_icon = {
+                "Critical": "🔴", 
+                "High": "🟠", 
+                "Medium": "🟡", 
+                "Low": "🟢"
+            }.get(severity, "⚪")
+            
+            impact_icon = {
+                "High": "⚡", 
+                "Medium": "⚡", 
+                "Low": "💧"
+            }.get(impact, "💧")
+            
+            # Truncate long strings
+            if len(description) > 100:
+                description = description[:100] + '...'
+            if len(recommendation) > 100:
+                recommendation = recommendation[:100] + '...'
             
             risk_details.append({
-                'Type': risk.get('type', 'Unknown'),
+                'Type': risk_type,
                 'Severity': f"{severity_icon} {severity}",
                 'Impact': f"{impact_icon} {impact}",
-                'Description': risk.get('description', 'No description')[:100] + '...' if len(risk.get('description', '')) > 100 else risk.get('description', 'No description'),
-                'Recommendation': risk.get('recommendation', 'No recommendation')[:100] + '...' if len(risk.get('recommendation', '')) > 100 else risk.get('recommendation', 'No recommendation')
+                'Description': description,
+                'Recommendation': recommendation
             })
+            
+        except Exception as e:
+            # Skip this risk if there's any error processing it
+            continue
     
     if risk_details:
-        df_risks = pd.DataFrame(risk_details)
-        st.dataframe(
-            df_risks, 
-            use_container_width=True,
-            hide_index=True
-        )
+        try:
+            df_risks = pd.DataFrame(risk_details)
+            st.dataframe(
+                df_risks,
+                use_container_width=True,
+                hide_index=True
+            )
+        except Exception as e:
+            st.error(f"Error displaying risk table: {str(e)}")
     else:
-        st.info("No risk details available.")
+        st.info("No risk details available to display.")
     
 def render_performance_trends_analysis(project_data):
     """Render performance trends and forecasting analysis"""
@@ -5248,10 +5757,10 @@ def render_portfolio_overview_page():
         if not portfolio_summary:
             st.error("❌ Unable to create portfolio summary.")
             return
-        
-        # Render comprehensive dashboard components
-        render_executive_kpi_dashboard(portfolio_summary)
-        
+
+        # Rendering the enhanced dashboard top panel
+        render_unified_executive_dashboard(portfolio_data)        
+
         # EXISTING MARGIN ANALYSIS
         render_enhanced_margin_analysis(portfolio_data)
         
@@ -5310,13 +5819,20 @@ def main():
         cm2_excellent = st.number_input("CM2 Excellent (%)", value=15.0, step=1.0, key="cm2_excellent")
         cm2_good = st.number_input("CM2 Good (%)", value=10.0, step=1.0, key="cm2_good")
         cm2_warning = st.number_input("CM2 Warning (%)", value=5.0, step=1.0, key="cm2_warning")
-    
+        
+
+        if cm2_excellent <= cm2_good:
+            st.warning("⚠️ Excellent threshold must be greater than Good threshold")             
+            cm2_excellent = cm2_good + 5.0            
+        if cm2_good <= cm2_warning:
+            st.warning("⚠️ Good threshold must be greater than Warning threshold")
+            cm2_good = cm2_warning + 5.0
         st.markdown("---")
     
     # Update all thresholds
-        EXECUTIVE_THRESHOLDS['cm2_margin']['excellent'] = cm2_excellent
-        EXECUTIVE_THRESHOLDS['cm2_margin']['good'] = cm2_good
-        EXECUTIVE_THRESHOLDS['cm2_margin']['warning'] = cm2_warning
+        EXECUTIVE_THRESHOLDS['cm2_margin']['excellent'] = float(cm2_excellent)
+        EXECUTIVE_THRESHOLDS['cm2_margin']['good'] = float(cm2_good)
+        EXECUTIVE_THRESHOLDS['cm2_margin']['warning'] = float(cm2_warning)
         EXECUTIVE_THRESHOLDS['cm2_margin']['critical'] = 0  # Always 0
 
 # Add this right after the threshold settings
