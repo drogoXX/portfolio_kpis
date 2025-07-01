@@ -162,6 +162,640 @@ st.markdown("""
 # UTILITY FUNCTIONS
 # ================================================================================
 
+def assess_project_risks(project_data):
+    """Simplified project risk assessment with dynamic thresholds"""
+    risk_factors = []
+    
+    if not project_data or not isinstance(project_data, dict):
+        return []
+    
+    try:
+        # Cost and margin risks
+        cost_analysis = project_data.get('cost_analysis', {})
+        if not isinstance(cost_analysis, dict):
+            cost_analysis = {}
+            
+        cm2_pct = float(cost_analysis.get('cm2_pct_fct_n', 0) or 0)
+        committed_ratio = float(cost_analysis.get('committed_ratio', 0) or 0)
+        cost_variance = float(cost_analysis.get('cost_variance_pct', 0) or 0)
+        
+        # Get current CM2 thresholds from EXECUTIVE_THRESHOLDS
+        try:
+            cm2_excellent = float(EXECUTIVE_THRESHOLDS.get('cm2_margin', {}).get('excellent', 15))
+            cm2_good = float(EXECUTIVE_THRESHOLDS.get('cm2_margin', {}).get('good', 10))
+            cm2_warning = float(EXECUTIVE_THRESHOLDS.get('cm2_margin', {}).get('warning', 5))
+        except (TypeError, ValueError):
+            # Use default values if thresholds are invalid
+            cm2_excellent = 15.0
+            cm2_good = 10.0
+            cm2_warning = 5.0
+        
+        # Validate threshold values
+        if not isinstance(cm2_excellent, (int, float)) or not isinstance(cm2_good, (int, float)) or not isinstance(cm2_warning, (int, float)):
+            # Use default values if thresholds are invalid
+            cm2_excellent = 15
+            cm2_good = 10
+            cm2_warning = 5
+
+        # Margin risks using dynamic thresholds
+        if cm2_pct < cm2_warning:  # Below warning threshold is critical
+            risk_factors.append({
+                'type': 'Margin Risk',
+                'severity': 'Critical',
+                'description': f'CM2 margin critically low at {cm2_pct:.1f}% (below warning threshold: {cm2_warning}%)',
+                'impact': 'High',
+                'recommendation': 'Immediate cost reduction and revenue optimization required'
+            })
+        elif cm2_pct < cm2_good:  # Between warning and good is high risk
+            risk_factors.append({
+                'type': 'Margin Risk',
+                'severity': 'High',
+                'description': f'CM2 margin below target at {cm2_pct:.1f}% (target: {cm2_good}%)',
+                'impact': 'Medium',
+                'recommendation': 'Review cost structure and identify optimization opportunities'
+            })
+        elif cm2_pct < cm2_excellent:  # Between good and excellent is medium risk
+            risk_factors.append({
+                'type': 'Margin Risk',
+                'severity': 'Medium',
+                'description': f'CM2 margin at {cm2_pct:.1f}% - room for improvement (excellent: {cm2_excellent}%)',
+                'impact': 'Low',
+                'recommendation': 'Continue monitoring and seek margin enhancement opportunities'
+            })
+        # If cm2_pct >= cm2_excellent, no margin risk is added
+        
+        # Cost commitment risks (keeping existing logic)
+        if committed_ratio > 1.2:
+            risk_factors.append({
+                'type': 'Cost Commitment',
+                'severity': 'Critical',
+                'description': f'Severe cost overcommitment: {committed_ratio:.2f} ratio',
+                'impact': 'High',
+                'recommendation': 'Emergency cost review and procurement controls'
+            })
+        elif committed_ratio > 1.1:
+            risk_factors.append({
+                'type': 'Cost Commitment',
+                'severity': 'High',
+                'description': f'High cost commitment: {committed_ratio:.2f} ratio',
+                'impact': 'Medium',
+                'recommendation': 'Enhanced cost monitoring and approval processes'
+            })
+        
+        # Cost variance risks (keeping existing logic)
+        if cost_variance > 25:
+            risk_factors.append({
+                'type': 'Cost Variance',
+                'severity': 'Critical',
+                'description': f'Extreme cost variance: {cost_variance:+.1f}%',
+                'impact': 'High',
+                'recommendation': 'Comprehensive cost baseline review required'
+            })
+        elif cost_variance > 15:
+            risk_factors.append({
+                'type': 'Cost Variance',
+                'severity': 'High',
+                'description': f'High cost variance: {cost_variance:+.1f}%',
+                'impact': 'Medium',
+                'recommendation': 'Detailed variance analysis and corrective action plan'
+            })
+        
+        # Schedule and POC risks (keeping existing logic)
+        poc_current = safe_get_value(project_data, 'revenues', 'POC%', 'n_ptd')
+        poc_previous = safe_get_value(project_data, 'revenues', 'POC%', 'n1_ptd')
+        poc_velocity = calculate_poc_velocity(poc_current, poc_previous)
+        
+        if poc_velocity < 2 and poc_current < 90:
+            risk_factors.append({
+                'type': 'Schedule Risk',
+                'severity': 'High',
+                'description': f'Low POC velocity: {poc_velocity:.1f}%/month',
+                'impact': 'Medium',
+                'recommendation': 'Resource reallocation and schedule acceleration'
+            })
+        
+        # Cash flow risks (keeping existing logic)
+        quarterly_data = project_data.get('cash_flow_quarterly', {})
+        if quarterly_data:
+            negative_quarters = sum(1 for q in quarterly_data.values() if q.get('fct_n', 0) < 0)
+            total_quarters = len(quarterly_data)
+            if negative_quarters > total_quarters * 0.3:
+                risk_factors.append({
+                    'type': 'Cash Flow',
+                    'severity': 'High',
+                    'description': f'Multiple negative cash flow quarters: {negative_quarters}/{total_quarters}',
+                    'impact': 'High',
+                    'recommendation': 'Cash flow optimization and milestone acceleration'
+                })
+        
+        # Revenue risks (keeping existing logic)
+        revenue_current = safe_get_value(project_data, 'revenues', 'Revenues', 'n_ptd')
+        revenue_previous = safe_get_value(project_data, 'revenues', 'Revenues', 'n1_ptd')
+        revenue_variance = calculate_period_variance(revenue_current, revenue_previous)
+        
+        if revenue_variance < -15:
+            risk_factors.append({
+                'type': 'Revenue Risk',
+                'severity': 'Critical',
+                'description': f'Significant revenue decline: {revenue_variance:.1f}%',
+                'impact': 'High',
+                'recommendation': 'Revenue recovery plan and stakeholder engagement'
+            })
+        
+        # NEW: Risk Contingency Adequacy Assessment (REPLACES Work Package Risk)
+        work_packages = project_data.get('work_packages', {})
+        risk_contingencies = [wp for wp in work_packages.values() 
+                             if 'risk' in wp.get('description', '').lower() and 
+                             'contingenc' in wp.get('description', '').lower()]
+        
+        contract_value = safe_get_value(project_data, 'revenues', 'Contract Price', 'n_ptd')
+        
+        if risk_contingencies:
+            # Sum all risk contingency values
+            total_risk_contingency = sum(rc.get('fct_n', 0) for rc in risk_contingencies)
+            contingency_percentage = (total_risk_contingency / contract_value * 100) if contract_value > 0 else 0
+            
+            # Check if contingency is being consumed
+            original_contingency = sum(rc.get('as_sold', 0) for rc in risk_contingencies)
+            contingency_consumption = ((original_contingency - total_risk_contingency) / original_contingency * 100) if original_contingency > 0 else 0
+            
+            # Risk Contingency Adequacy Thresholds
+            if contingency_percentage < 1:  # Less than 1% contingency remaining
+                risk_factors.append({
+                    'type': 'Contingency Risk',
+                    'severity': 'Medium',
+                    'description': f'Insufficient risk contingency: {contingency_percentage:.1f}% of contract value',
+                    'impact': 'Medium',
+                    'recommendation': 'Review risk register and consider contingency replenishment'
+                })
+            elif contingency_percentage < 5 and contingency_consumption > 80:  # <5% remaining AND >80% consumed
+                risk_factors.append({
+                    'type': 'Contingency Risk', 
+                    'severity': 'High',
+                    'description': f'Low contingency: {contingency_percentage:.1f}% remaining, {contingency_consumption:.0f}% consumed',
+                    'impact': 'High',
+                    'recommendation': 'Monitor emerging risks closely, prepare contingency plan'
+                })
+        else:
+            # No risk contingency found at all
+            risk_factors.append({
+                'type': 'Contingency Risk',
+                'severity': 'High',
+                'description': 'No risk contingency identified in project structure',
+                'impact': 'High',
+                'recommendation': 'Establish risk contingency budget for unforeseen events'
+            })
+        
+        # OPTIONAL: Add Work Package Performance Concentration Risk
+        high_variance_wps = [wp for wp in work_packages.values() 
+                            if wp.get('variance_pct', 0) > 15 and
+                            not ('risk' in wp.get('description', '').lower() and 
+                                 'contingenc' in wp.get('description', '').lower())]
+        
+        if len(work_packages) > 0 and len(high_variance_wps) / len(work_packages) > 0.3:  # >30% of WPs have issues
+            risk_factors.append({
+                'type': 'WP Performance Risk',
+                'severity': 'High',
+                'description': f'{len(high_variance_wps)} of {len(work_packages)} work packages exceeding budget by >15%',
+                'impact': 'High',
+                'recommendation': 'Systemic issue - review estimation or execution processes'
+            })
+        
+        # OPTIONAL: Add Financial Buffer Risk
+        if risk_contingencies and contingency_percentage < 3 and cm2_pct < 10:
+            risk_factors.append({
+                'type': 'Financial Buffer Risk',
+                'severity': 'Critical',
+                'description': f'Low contingency ({contingency_percentage:.1f}%) combined with thin margins ({cm2_pct:.1f}%)',
+                'impact': 'High',
+                'recommendation': 'Project has minimal financial buffer for risks'
+            })
+        
+    except Exception as e:
+        risk_factors.append({
+            'type': 'Assessment Error',
+            'severity': 'Medium',
+            'description': f'Risk assessment incomplete: {str(e)}',
+            'impact': 'Low',
+            'recommendation': 'Manual risk review recommended'
+        })
+    
+    # Validate and clean risk factors before returning
+    validated_risks = []
+    for risk in risk_factors:
+        if isinstance(risk, dict) and all(key in risk for key in ['type', 'severity', 'description', 'impact', 'recommendation']):
+            # Ensure all values are not None
+            validated_risk = {
+                'type': str(risk.get('type', 'Unknown')),
+                'severity': str(risk.get('severity', 'Unknown')),
+                'description': str(risk.get('description', 'No description')),
+                'impact': str(risk.get('impact', 'Unknown')),
+                'recommendation': str(risk.get('recommendation', 'No recommendation'))
+            }
+            validated_risks.append(validated_risk)
+    
+    return validated_risks
+
+def parse_yearly_revenue_projections(worksheet, start_row=20):
+    """
+    Parse yearly revenue projections from 2_Project_Revenues worksheet
+    Expected structure:
+    - Column A: FY (Fiscal Year)
+    - Column B: ACT Prior + ACTFY
+    - Column C: RFC (Revenue Forecast to Complete)
+    - Column D: POC%
+    """
+    yearly_projections = {}
+    
+    # Start parsing from row 20 (adjust based on actual template)
+    for row in range(start_row, min(worksheet.max_row + 1, start_row + 50)):  # Limit search
+        try:
+            fy = worksheet.cell(row=row, column=1).value
+            if not fy:
+                continue
+                
+            # Clean FY value - handle "Previous Period" and "FY20XX" formats
+            fy_str = str(fy).strip()
+            
+            # Skip empty rows or header rows
+            if not fy_str or fy_str.upper() == 'FY' or 'FISCAL' in fy_str.upper():
+                continue
+                
+            # Parse values
+            actual_prior_fy = safe_float(worksheet.cell(row=row, column=2).value)
+            revenue_rfc = safe_float(worksheet.cell(row=row, column=3).value)
+            
+            # IMPORTANT: POC is already in percentage form in Excel, DO NOT divide by 100
+            poc_value = worksheet.cell(row=row, column=4).value
+            if poc_value is not None:
+                # If it's a percentage value in Excel (e.g., 2%), it might come as 0.02
+                # Check if the value is less than 1, which would indicate it's already divided
+                poc_percentage = float(poc_value)
+                if 0 < poc_percentage <= 1:
+                    # It's likely already divided by 100 (e.g., 0.02 for 2% or 1.0 for 100%), so multiply back
+                    poc_percentage = poc_percentage * 100
+                # If poc_percentage > 1, it's already in percentage form (e.g., 2.0 for 2%), keep as is
+            else:
+                poc_percentage = 0
+            
+            # Only include if there's meaningful data
+            if actual_prior_fy > 0 or revenue_rfc > 0 or poc_percentage > 0:
+                yearly_projections[fy_str] = {
+                    'actual_prior_fy': actual_prior_fy,
+                    'revenue_rfc': revenue_rfc,
+                    'poc_percentage': poc_percentage,  # This should now be 2.0, not 0.02
+                    'total_revenue': actual_prior_fy + revenue_rfc  # Combined view
+                }
+        except Exception as e:
+            continue  # Skip problematic rows
+    
+    return yearly_projections
+
+
+def calculate_revenue_metrics(yearly_projections, contract_value):
+    """Calculate advanced revenue metrics from yearly projections"""
+    if not yearly_projections:
+        return {}
+        
+    metrics = {
+        'total_recognized': 0,
+        'total_rfc': 0,
+        'completion_year': None,
+        'years_to_complete': 0,
+        'revenue_velocity': [],
+        'poc_acceleration': [],
+        'revenue_concentration': {}
+    }
+    
+    sorted_years = sorted(yearly_projections.keys())
+    
+    for i, year in enumerate(sorted_years):
+        year_data = yearly_projections[year]
+        
+        # Aggregate totals
+        metrics['total_recognized'] += year_data['actual_prior_fy']
+        metrics['total_rfc'] += year_data['revenue_rfc']
+        
+        # Find completion year
+        if year_data['poc_percentage'] >= 100 and not metrics['completion_year']:
+            metrics['completion_year'] = year
+            metrics['years_to_complete'] = i + 1
+        
+        # Calculate year-over-year metrics
+        if i > 0:
+            prev_year = sorted_years[i-1]
+            prev_data = yearly_projections[prev_year]
+            
+            # Revenue velocity
+            if prev_data['total_revenue'] > 0:
+                velocity = ((year_data['total_revenue'] - prev_data['total_revenue']) / 
+                           prev_data['total_revenue'] * 100)
+                metrics['revenue_velocity'].append({
+                    'year': year,
+                    'velocity': velocity
+                })
+            
+            # POC acceleration
+            poc_change = year_data['poc_percentage'] - prev_data['poc_percentage']
+            metrics['poc_acceleration'].append({
+                'year': year,
+                'acceleration': poc_change
+            })
+    
+    # Revenue concentration analysis
+    total_revenue = metrics['total_recognized'] + metrics['total_rfc']
+    for year, data in yearly_projections.items():
+        year_revenue = data['total_revenue']
+        if total_revenue > 0:
+            metrics['revenue_concentration'][year] = (year_revenue / total_revenue * 100)
+    
+    # Burndown rate
+    if contract_value > 0:
+        metrics['revenue_burndown_pct'] = (metrics['total_rfc'] / contract_value * 100)
+        if max(d['poc_percentage'] for d in yearly_projections.values()) > 0:
+            metrics['recognition_efficiency'] = (metrics['total_recognized'] / 
+                                               (contract_value * max(d['poc_percentage'] for d in yearly_projections.values()) / 100) * 100)
+        else:
+            metrics['recognition_efficiency'] = 0
+    
+    return metrics
+
+# Also add these visualization functions that are referenced in render_portfolio_revenue_analytics:
+
+def create_revenue_pipeline_chart(portfolio_yearly):
+    """Create stacked area chart for revenue pipeline"""
+    fig = go.Figure()
+    
+    if not portfolio_yearly:
+        return fig
+    
+    # First, organize years properly
+    ordered_years = []
+    fiscal_years = []
+    has_previous_period = False
+    
+    for year in portfolio_yearly.keys():
+        if 'Previous' in str(year):
+            has_previous_period = True
+        else:
+            fiscal_years.append(year)
+    
+    # Build ordered list: Pre-2024 first, then sorted fiscal years
+    if has_previous_period:
+        ordered_years.append('Pre-2024')
+    ordered_years.extend(sorted(fiscal_years))
+    
+    # Get all unique projects
+    all_projects = set()
+    for year_data in portfolio_yearly.values():
+        all_projects.update(year_data.keys())
+    projects = sorted(list(all_projects))
+    
+    # Color palette
+    colors = px.colors.qualitative.Set3[:len(projects)]
+    
+    for i, project in enumerate(projects):
+        y_values = []
+        hover_text = []
+        
+        for display_year in ordered_years:
+            # Map display year back to data key
+            if display_year == 'Pre-2024':
+                # Find the key that contains "Previous"
+                data_year = next((y for y in portfolio_yearly.keys() if 'Previous' in str(y)), None)
+            else:
+                data_year = display_year
+            
+            if data_year and data_year in portfolio_yearly:
+                project_data = portfolio_yearly[data_year].get(project, {})
+                revenue = project_data.get('total_revenue', 0)
+                poc = project_data.get('poc_percentage', 0)
+            else:
+                revenue = 0
+                poc = 0
+            
+            y_values.append(revenue / 1000000)  # Convert to millions
+            hover_text.append(f"{project}<br>Revenue: CHF {revenue/1000000:.1f}M<br>POC: {poc:.1f}%")
+        
+        fig.add_trace(go.Scatter(
+            x=ordered_years,
+            y=y_values,
+            name=project,
+            mode='lines',
+            stackgroup='revenue',
+            fillcolor=colors[i % len(colors)],
+            hovertext=hover_text,
+            hoverinfo='text'
+        ))
+    
+    fig.update_layout(
+        title='Portfolio Revenue Pipeline by Year',
+        xaxis_title='Fiscal Year',
+        yaxis_title='Revenue (CHF Millions)',
+        hovermode='x unified',
+        height=500,
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.05
+        ),
+        xaxis=dict(
+            type='category',
+            categoryorder='array',
+            categoryarray=ordered_years
+        )
+    )
+    
+    return fig
+
+def create_completion_timeline_chart(portfolio_data):
+    """Create Gantt-style project completion timeline"""
+    timeline_data = []
+    
+    for project_id, project in portfolio_data.items():
+        yearly_projections = project.get('data', {}).get('yearly_revenue_projections', {})
+        if not yearly_projections:
+            continue
+        
+        # Check if there's a Previous Period
+        has_previous = any('Previous' in str(year) for year in yearly_projections.keys())
+        
+        # Get fiscal years only
+        fiscal_years = [year for year in yearly_projections.keys() if 'Previous' not in str(year)]
+        fiscal_years.sort()
+        
+        if not fiscal_years:
+            continue
+        
+        # Determine start point
+        if has_previous:
+            start_year = 'Pre-2024'
+        else:
+            start_year = fiscal_years[0]
+        
+        # Find completion year (where POC >= 100%)
+        completion_year = None
+        for year in fiscal_years:
+            if yearly_projections[year].get('poc_percentage', 0) >= 100:
+                completion_year = year
+                break
+        
+        if not completion_year:
+            completion_year = fiscal_years[-1]
+        
+        # Get maximum POC
+        max_poc = max(data.get('poc_percentage', 0) for data in yearly_projections.values())
+        
+        timeline_data.append({
+            'Project': project_id,
+            'Start': start_year,
+            'Finish': completion_year,
+            'POC': max_poc
+        })
+    
+    if not timeline_data:
+        return go.Figure()
+    
+    # Sort by project name
+    timeline_data.sort(key=lambda x: x['Project'])
+    
+    # Prepare x-axis categories
+    x_categories = ['Pre-2024']
+    
+    # Add all years from 2024 to max completion year
+    all_completion_years = [int(p['Finish']) for p in timeline_data if p['Finish'].isdigit()]
+    if all_completion_years:
+        max_year = max(all_completion_years)
+        for year in range(2024, max_year + 1):
+            x_categories.append(str(year))
+    
+    # Create figure
+    fig = go.Figure()
+    
+    for i, project in enumerate(timeline_data):
+        x_values = [project['Start'], project['Finish']]
+        y_values = [i, i]
+        
+        fig.add_trace(go.Scatter(
+            x=x_values,
+            y=y_values,
+            mode='lines+markers',
+            name=project['Project'],
+            line=dict(width=20),
+            marker=dict(size=10),
+            hovertemplate=f"{project['Project']}<br>Start: {project['Start']}<br>Finish: {project['Finish']}<br>POC: {project['POC']:.1f}%<extra></extra>"
+        ))
+    
+    fig.update_layout(
+        title='Project Completion Timeline',
+        xaxis_title='Fiscal Year',
+        xaxis=dict(
+            type='category',
+            categoryorder='array',
+            categoryarray=x_categories,
+            range=[-0.5, len(x_categories) - 0.5]
+        ),
+        yaxis=dict(
+            tickmode='array',
+            tickvals=list(range(len(timeline_data))),
+            ticktext=[p['Project'] for p in timeline_data],
+            autorange='reversed'
+        ),
+        height=max(400, len(timeline_data) * 50),
+        showlegend=False
+    )
+    
+    return fig
+
+def create_revenue_concentration_heatmap(portfolio_data):
+    """Create heatmap showing revenue concentration by project and year"""
+    
+    # Prepare data
+    all_years_set = set()
+    project_year_data = {}
+    
+    for project_id, project in portfolio_data.items():
+        yearly_data = project.get('data', {}).get('yearly_revenue_projections', {})
+        if yearly_data:
+            project_year_data[project_id] = yearly_data
+            all_years_set.update(yearly_data.keys())
+    
+    if not all_years_set:
+        return go.Figure()
+    
+    # Separate and order years
+    ordered_years = []
+    fiscal_years = []
+    has_previous = False
+    
+    for year in all_years_set:
+        if 'Previous' in str(year):
+            has_previous = True
+        else:
+            fiscal_years.append(year)
+    
+    if has_previous:
+        ordered_years.append('Pre-2024')
+    ordered_years.extend(sorted(fiscal_years))
+    
+    projects = sorted(project_year_data.keys())
+    
+    # Create matrix
+    z_revenue = []
+    hover_texts = []
+    
+    for project in projects:
+        project_revenues = []
+        project_hover = []
+        
+        for display_year in ordered_years:
+            # Map display year to data key
+            if display_year == 'Pre-2024':
+                data_year = next((y for y in project_year_data[project].keys() if 'Previous' in str(y)), None)
+            else:
+                data_year = display_year
+            
+            if data_year and data_year in project_year_data[project]:
+                revenue = project_year_data[project][data_year]['total_revenue']
+                poc = project_year_data[project][data_year]['poc_percentage']
+            else:
+                revenue = 0
+                poc = 0
+            
+            project_revenues.append(revenue / 1000000)  # Convert to millions
+            project_hover.append(f"Project: {project}<br>Year: {display_year}<br>Revenue: CHF {revenue/1000000:.1f}M<br>POC: {poc:.1f}%")
+        
+        z_revenue.append(project_revenues)
+        hover_texts.append(project_hover)
+    
+    fig = go.Figure(data=go.Heatmap(
+        z=z_revenue,
+        x=ordered_years,
+        y=projects,
+        colorscale='YlOrRd',
+        hovertext=hover_texts,
+        hoverinfo='text',
+        colorbar=dict(title='Revenue (CHF M)')
+    ))
+    
+    fig.update_layout(
+        title='Revenue Concentration by Project and Year',
+        xaxis_title='Fiscal Year',
+        yaxis_title='Project',
+        height=max(400, len(projects) * 40),
+        xaxis=dict(
+            type='category',
+            categoryorder='array',
+            categoryarray=ordered_years
+        )
+    )
+    
+    return fig
+
+
 def calculate_contingency_metrics(work_packages, poc_current=0):
     """
     Calculate contingency efficiency metrics for a project
@@ -597,7 +1231,9 @@ def parse_excel_template_v24(uploaded_file):
             'cash_flow_monthly': {},
             'cost_analysis': {},
             'earned_value': {},
-            'risk_factors': []
+            'risk_factors': [],
+            'yearly_revenue_projections': {},  # NEW
+            'revenue_metrics': {}  # NEW
         }
         
         st.info(f"📋 Parsing Template - Found sheets: {workbook.sheetnames}")
@@ -642,12 +1278,12 @@ def parse_excel_template_v24(uploaded_file):
 
             # Parse quarterly revenue data if exists (rows 12-16)
             quarterly_row_mapping = {
-            'Q1': 12,
-            'Q2': 13,
-            'Q3': 14,
-            'Q4': 15,
-            'Total': 16
-        }
+                'Q1': 12,
+                'Q2': 13,
+                'Q3': 14,
+                'Q4': 15,
+                'Total': 16
+            }
 
             # Debug flag for quarterly parsing
             quarterly_debug = st.checkbox("Show Quarterly Parsing Debug", value=False, key=f"quarterly_debug_{uploaded_file.name}")
@@ -733,6 +1369,63 @@ def parse_excel_template_v24(uploaded_file):
                     else:
                         st.warning(f"{q}: ⚠️ No data")
 
+            # ================================================================================
+            # NEW: Parse Multi-Year Revenue Projections
+            # ================================================================================
+            # Look for "Revenue by Fiscal Year" section or "FY" header
+            yearly_start_row = None
+            
+            # Search for the yearly data section (typically after row 17)
+            for row in range(18, min(40, ws_revenues.max_row + 1)):
+                try:
+                    cell_a = ws_revenues.cell(row=row, column=1).value
+                    cell_b = ws_revenues.cell(row=row, column=2).value
+                    
+                    # Look for header indicators
+                    if cell_a and ('FY' in str(cell_a).upper() or 'FISCAL' in str(cell_a).upper()):
+                        # Check if next row has actual data
+                        next_row_a = ws_revenues.cell(row=row+1, column=1).value
+                        if next_row_a and ('Previous' in str(next_row_a) or '20' in str(next_row_a) or 'FY' in str(next_row_a)):
+                            yearly_start_row = row + 1
+                            st.info(f"📊 Found yearly revenue data starting at row {yearly_start_row}")
+                            break
+                    # Alternative: look for "Previous Period" directly
+                    elif cell_a and 'Previous Period' in str(cell_a):
+                        yearly_start_row = row
+                        st.info(f"📊 Found yearly revenue data starting at row {yearly_start_row}")
+                        break
+                except Exception:
+                    continue
+            
+            if yearly_start_row:
+                try:
+                    project_data['yearly_revenue_projections'] = parse_yearly_revenue_projections(
+                        ws_revenues, 
+                        start_row=yearly_start_row
+                    )
+                    
+                    # Calculate derived metrics
+                    contract_value = project_data['revenues'].get('Contract Price', {}).get('n_ptd', 0)
+                    project_data['revenue_metrics'] = calculate_revenue_metrics(
+                        project_data['yearly_revenue_projections'],
+                        contract_value
+                    )
+                    
+                    # Debug: Show what was parsed
+                    if st.checkbox("Show yearly revenue parsing details", value=False, key=f"yearly_debug_{project_data['project_info'].get('Project No.', 'unknown')}"):
+                        st.write("**Parsed Yearly Projections:**")
+                        st.json(project_data['yearly_revenue_projections'])
+                        st.write("**Calculated Metrics:**")
+                        st.json(project_data['revenue_metrics'])
+                        
+                except Exception as e:
+                    st.warning(f"Could not parse yearly revenue projections: {str(e)}")
+                    project_data['yearly_revenue_projections'] = {}
+                    project_data['revenue_metrics'] = {}
+            else:
+                st.info("ℹ️ No yearly revenue projection data found in template")
+                project_data['yearly_revenue_projections'] = {}
+                project_data['revenue_metrics'] = {}
         
         # Parse Cost Breakdown (Sheet 3) - COMPREHENSIVE WITH FIX #3
         if '3_Cost_Breakdown' in workbook.sheetnames:
@@ -753,7 +1446,6 @@ def parse_excel_template_v24(uploaded_file):
                 'total_fct_n1': 0
             }
             
-
             # Parse cost data with enhanced logic
             max_row = min(ws_costs.max_row, 50) if hasattr(ws_costs, 'max_row') else 30
             work_package_count = 0
@@ -807,7 +1499,7 @@ def parse_excel_template_v24(uploaded_file):
                             'actuals': actuals,
                             'variance_pct': calculate_period_variance(fct_n, as_sold) if as_sold > 0 else 0,
                             'commitment_ratio': committed / as_sold if as_sold > 0 else 0,
-			    'is_risk_contingency': is_risk_contingency
+                            'is_risk_contingency': is_risk_contingency
                         }
 
                         project_data['work_packages'][item_str] = work_package
@@ -845,79 +1537,75 @@ def parse_excel_template_v24(uploaded_file):
             # Mark if selling price was found
             project_data['cost_analysis']['selling_price_found'] = selling_price_found
 
-        # Enhanced cost analysis calculations
-        contract_value = safe_get_value(project_data, 'revenues', 'Contract Price', 'n_ptd')
+            # Enhanced cost analysis calculations
+            contract_value = safe_get_value(project_data, 'revenues', 'Contract Price', 'n_ptd')
 
-        # Get selling prices for all periods
-        # Check if selling price was actually found in the template
-        if not project_data['cost_analysis'].get('selling_price_found', False):
-            # Selling price row was not found in the template
+            # Get selling prices for all periods
+            # Check if selling price was actually found in the template
+            if not project_data['cost_analysis'].get('selling_price_found', False):
+                # Selling price row was not found in the template
+                if project_data['cost_analysis']['total_as_sold'] > 0:
+                    # We have cost data but no selling price - this is a problem
+                    st.error("❌ Selling Price row not found in template - please check your Excel template")
+                    st.info("Expected to find a row with 'Selling Price' in the cost breakdown sheet")
+                    # Use contract value as emergency fallback
+                    project_data['cost_analysis']['selling_price_as_sold'] = contract_value
+                    project_data['cost_analysis']['selling_price_fct_n1'] = contract_value
+                    project_data['cost_analysis']['selling_price_fct_n'] = contract_value
+                else:
+                    # No cost data at all - use contract value as fallback
+                    project_data['cost_analysis']['selling_price_as_sold'] = contract_value
+                    project_data['cost_analysis']['selling_price_fct_n1'] = contract_value
+                    project_data['cost_analysis']['selling_price_fct_n'] = contract_value
+
+            # CALCULATE CM1 and CM2 for all periods
+            # AS SOLD period
+            selling_price_as = project_data['cost_analysis']['selling_price_as_sold']
+            if selling_price_as > 0:
+                ec_as = project_data['cost_analysis']['ec_total_as_sold']
+                ic_as = project_data['cost_analysis']['ic_total_as_sold']
+        
+                # Calculate CM1 AS
+                project_data['cost_analysis']['cm1_value_as_sold'] = selling_price_as - ec_as
+                project_data['cost_analysis']['cm1_pct_as_sold'] = ((selling_price_as - ec_as) / selling_price_as * 100) if selling_price_as > 0 else 0
+        
+                # Calculate CM2 AS
+                project_data['cost_analysis']['cm2_value_as_sold'] = selling_price_as - ec_as - ic_as
+                project_data['cost_analysis']['cm2_pct_as_sold'] = ((selling_price_as - ec_as - ic_as) / selling_price_as * 100) if selling_price_as > 0 else 0
+
+            # FCT(n-1) period
+            selling_price_n1 = project_data['cost_analysis']['selling_price_fct_n1']
+            if selling_price_n1 > 0:
+                ec_n1 = project_data['cost_analysis']['ec_total_fct_n1']
+                ic_n1 = project_data['cost_analysis']['ic_total_fct_n1']
+        
+                # Calculate CM1 FCT(n-1)
+                project_data['cost_analysis']['cm1_value_fct_n1'] = selling_price_n1 - ec_n1
+                project_data['cost_analysis']['cm1_pct_fct_n1'] = ((selling_price_n1 - ec_n1) / selling_price_n1 * 100) if selling_price_n1 > 0 else 0
+        
+                # Calculate CM2 FCT(n-1)
+                project_data['cost_analysis']['cm2_value_fct_n1'] = selling_price_n1 - ec_n1 - ic_n1
+                project_data['cost_analysis']['cm2_pct_fct_n1'] = ((selling_price_n1 - ec_n1 - ic_n1) / selling_price_n1 * 100) if selling_price_n1 > 0 else 0
+
+            # FCT(n) period
+            selling_price_n = project_data['cost_analysis']['selling_price_fct_n']
+            if selling_price_n > 0:
+                ec_n = project_data['cost_analysis']['ec_total_fct_n']
+                ic_n = project_data['cost_analysis']['ic_total_fct_n']
+        
+                # Calculate CM1 FCT(n)
+                project_data['cost_analysis']['cm1_value_fct_n'] = selling_price_n - ec_n
+                project_data['cost_analysis']['cm1_pct_fct_n'] = ((selling_price_n - ec_n) / selling_price_n * 100) if selling_price_n > 0 else 0
+        
+                # Calculate CM2 FCT(n)
+                project_data['cost_analysis']['cm2_value_fct_n'] = selling_price_n - ec_n - ic_n
+                project_data['cost_analysis']['cm2_pct_fct_n'] = ((selling_price_n - ec_n - ic_n) / selling_price_n * 100) if selling_price_n > 0 else 0
+
             if project_data['cost_analysis']['total_as_sold'] > 0:
-                # We have cost data but no selling price - this is a problem
-                st.error("❌ Selling Price row not found in template - please check your Excel template")
-                st.info("Expected to find a row with 'Selling Price' in the cost breakdown sheet")
-                # Use contract value as emergency fallback
-                project_data['cost_analysis']['selling_price_as_sold'] = contract_value
-                project_data['cost_analysis']['selling_price_fct_n1'] = contract_value
-                project_data['cost_analysis']['selling_price_fct_n'] = contract_value
-            else:
-                # No cost data at all - use contract value as fallback
-                project_data['cost_analysis']['selling_price_as_sold'] = contract_value
-                project_data['cost_analysis']['selling_price_fct_n1'] = contract_value
-                project_data['cost_analysis']['selling_price_fct_n'] = contract_value
-
-
-# CALCULATE CM1 and CM2 for all periods
-# CM1 = Selling Price - Total EC
-# CM2 = CM1 - Total IC = Selling Price - Total EC - Total IC
-
-# AS SOLD period
-        selling_price_as = project_data['cost_analysis']['selling_price_as_sold']
-        if selling_price_as > 0:
-            ec_as = project_data['cost_analysis']['ec_total_as_sold']
-            ic_as = project_data['cost_analysis']['ic_total_as_sold']
-    
-            # Calculate CM1 AS
-            project_data['cost_analysis']['cm1_value_as_sold'] = selling_price_as - ec_as
-            project_data['cost_analysis']['cm1_pct_as_sold'] = ((selling_price_as - ec_as) / selling_price_as * 100) if selling_price_as > 0 else 0
-    
-            # Calculate CM2 AS
-            project_data['cost_analysis']['cm2_value_as_sold'] = selling_price_as - ec_as - ic_as
-            project_data['cost_analysis']['cm2_pct_as_sold'] = ((selling_price_as - ec_as - ic_as) / selling_price_as * 100) if selling_price_as > 0 else 0
-
-        # FCT(n-1) period
-        selling_price_n1 = project_data['cost_analysis']['selling_price_fct_n1']
-        if selling_price_n1 > 0:
-            ec_n1 = project_data['cost_analysis']['ec_total_fct_n1']
-            ic_n1 = project_data['cost_analysis']['ic_total_fct_n1']
-    
-            # Calculate CM1 FCT(n-1)
-            project_data['cost_analysis']['cm1_value_fct_n1'] = selling_price_n1 - ec_n1
-            project_data['cost_analysis']['cm1_pct_fct_n1'] = ((selling_price_n1 - ec_n1) / selling_price_n1 * 100) if selling_price_n1 > 0 else 0
-    
-            # Calculate CM2 FCT(n-1)
-            project_data['cost_analysis']['cm2_value_fct_n1'] = selling_price_n1 - ec_n1 - ic_n1
-            project_data['cost_analysis']['cm2_pct_fct_n1'] = ((selling_price_n1 - ec_n1 - ic_n1) / selling_price_n1 * 100) if selling_price_n1 > 0 else 0
-
-        # FCT(n) period
-        selling_price_n = project_data['cost_analysis']['selling_price_fct_n']
-        if selling_price_n > 0:
-            ec_n = project_data['cost_analysis']['ec_total_fct_n']
-            ic_n = project_data['cost_analysis']['ic_total_fct_n']
-    
-            # Calculate CM1 FCT(n)
-            project_data['cost_analysis']['cm1_value_fct_n'] = selling_price_n - ec_n
-            project_data['cost_analysis']['cm1_pct_fct_n'] = ((selling_price_n - ec_n) / selling_price_n * 100) if selling_price_n > 0 else 0
-    
-            # Calculate CM2 FCT(n)
-            project_data['cost_analysis']['cm2_value_fct_n'] = selling_price_n - ec_n - ic_n
-            project_data['cost_analysis']['cm2_pct_fct_n'] = ((selling_price_n - ec_n - ic_n) / selling_price_n * 100) if selling_price_n > 0 else 0
-
-        if project_data['cost_analysis']['total_as_sold'] > 0:
-            project_data['cost_analysis']['committed_ratio'] = (
-                project_data['cost_analysis']['total_committed'] / 
-                project_data['cost_analysis']['total_as_sold']
-            )
+                project_data['cost_analysis']['committed_ratio'] = (
+                    project_data['cost_analysis']['total_committed'] / 
+                    project_data['cost_analysis']['total_as_sold']
+                )
         
         # Parse Cash Flow (Sheet 4) - QUARTERLY ONLY
         if '4_Cash_Flow' in workbook.sheetnames:
@@ -969,6 +1657,7 @@ def parse_excel_template_v24(uploaded_file):
         st.info(f"• **Quarterly Cash Flow:** {len(project_data['cash_flow_quarterly'])} periods")
         st.info(f"• **Work Packages:** {len(project_data['work_packages'])} items")
         st.info(f"• **Risk Factors:** {len(project_data['risk_factors'])} identified")
+        st.info(f"• **Yearly Projections:** {len(project_data['yearly_revenue_projections'])} years")  # NEW
         
         # Enhanced CM data verification
         st.markdown("#### 📊 Margin Data Verification:")
@@ -997,7 +1686,7 @@ def parse_excel_template_v24(uploaded_file):
             st.success(f"✅ **CM2 Data Calculated:**")
             st.write(f"   • CM2%: AS={project_data['cost_analysis']['cm2_pct_as_sold']:.2f}%, FCT(n)={project_data['cost_analysis']['cm2_pct_fct_n']:.2f}%, FCT(n-1)={project_data['cost_analysis']['cm2_pct_fct_n1']:.2f}%")
             st.write(f"   • CM2 Value: AS={project_data['cost_analysis']['cm2_value_as_sold']:,.0f}, FCT(n)={project_data['cost_analysis']['cm2_value_fct_n']:,.0f}, FCT(n-1)={project_data['cost_analysis']['cm2_value_fct_n1']:,.0f}")
-        # Display EC/IC breakdown
+            # Display EC/IC breakdown
             st.markdown("**Cost Breakdown Verification:**")
             st.write(f"   • EC: AS={project_data['cost_analysis']['ec_total_as_sold']:,.0f}, FCT(n)={project_data['cost_analysis']['ec_total_fct_n']:,.0f}, FCT(n-1)={project_data['cost_analysis']['ec_total_fct_n1']:,.0f}")
             st.write(f"   • IC: AS={project_data['cost_analysis']['ic_total_as_sold']:,.0f}, FCT(n)={project_data['cost_analysis']['ic_total_fct_n']:,.0f}, FCT(n-1)={project_data['cost_analysis']['ic_total_fct_n1']:,.0f}")
@@ -1016,173 +1705,7 @@ def parse_excel_template_v24(uploaded_file):
     except Exception as e:
         st.error(f"❌ Error parsing template: {str(e)}")
         st.exception(e)
-        return None
-
-def assess_project_risks(project_data):
-    """Simplified project risk assessment with dynamic thresholds"""
-    risk_factors = []
-    
-    if not project_data or not isinstance(project_data, dict):
-        return []
-    
-    try:
-        # Cost and margin risks
-        cost_analysis = project_data.get('cost_analysis', {})
-        if not isinstance(cost_analysis, dict):
-            cost_analysis = {}
-            
-        cm2_pct = float(cost_analysis.get('cm2_pct_fct_n', 0) or 0)
-        committed_ratio = float(cost_analysis.get('committed_ratio', 0) or 0)
-        cost_variance = float(cost_analysis.get('cost_variance_pct', 0) or 0)
-        
-        # Get current CM2 thresholds from EXECUTIVE_THRESHOLDS
-        try:
-            cm2_excellent = float(EXECUTIVE_THRESHOLDS.get('cm2_margin', {}).get('excellent', 15))
-            cm2_good = float(EXECUTIVE_THRESHOLDS.get('cm2_margin', {}).get('good', 10))
-            cm2_warning = float(EXECUTIVE_THRESHOLDS.get('cm2_margin', {}).get('warning', 5))
-        except (TypeError, ValueError):
-            # Use default values if thresholds are invalid
-            cm2_excellent = 15.0
-            cm2_good = 10.0
-            cm2_warning = 5.0
-
-        # Margin risks using dynamic thresholds
-        if cm2_pct < cm2_warning:  # Below warning threshold is critical
-            risk_factors.append({
-                'type': 'Margin Risk',
-                'severity': 'Critical',
-                'description': f'CM2 margin critically low at {cm2_pct:.1f}% (below warning threshold: {cm2_warning}%)',
-                'impact': 'High',
-                'recommendation': 'Immediate cost reduction and revenue optimization required'
-            })
-        elif cm2_pct < cm2_good:  # Between warning and good is high risk
-            risk_factors.append({
-                'type': 'Margin Risk',
-                'severity': 'High',
-                'description': f'CM2 margin below target at {cm2_pct:.1f}% (target: {cm2_good}%)',
-                'impact': 'Medium',
-                'recommendation': 'Review cost structure and identify optimization opportunities'
-            })
-        elif cm2_pct < cm2_excellent:  # Between good and excellent is medium risk
-            risk_factors.append({
-                'type': 'Margin Risk',
-                'severity': 'Medium',
-                'description': f'CM2 margin at {cm2_pct:.1f}% - room for improvement (excellent: {cm2_excellent}%)',
-                'impact': 'Low',
-                'recommendation': 'Continue monitoring and seek margin enhancement opportunities'
-            })
-        
-        # Cost commitment risks
-        if committed_ratio > 1.2:
-            risk_factors.append({
-                'type': 'Cost Commitment',
-                'severity': 'Critical',
-                'description': f'Severe cost overcommitment: {committed_ratio:.2f} ratio',
-                'impact': 'High',
-                'recommendation': 'Emergency cost review and procurement controls'
-            })
-        elif committed_ratio > 1.1:
-            risk_factors.append({
-                'type': 'Cost Commitment',
-                'severity': 'High',
-                'description': f'High cost commitment: {committed_ratio:.2f} ratio',
-                'impact': 'Medium',
-                'recommendation': 'Enhanced cost monitoring and approval processes'
-            })
-        
-        # Cost variance risks
-        if cost_variance > 25:
-            risk_factors.append({
-                'type': 'Cost Variance',
-                'severity': 'Critical',
-                'description': f'Extreme cost variance: {cost_variance:+.1f}%',
-                'impact': 'High',
-                'recommendation': 'Comprehensive cost baseline review required'
-            })
-        elif cost_variance > 15:
-            risk_factors.append({
-                'type': 'Cost Variance',
-                'severity': 'High',
-                'description': f'High cost variance: {cost_variance:+.1f}%',
-                'impact': 'Medium',
-                'recommendation': 'Detailed variance analysis and corrective action plan'
-            })
-        
-        # Schedule and POC risks
-        poc_current = float(safe_get_value(project_data, 'revenues', 'POC%', 'n_ptd') or 0)
-        poc_previous = float(safe_get_value(project_data, 'revenues', 'POC%', 'n1_ptd') or 0)
-        poc_velocity = calculate_poc_velocity(poc_current, poc_previous)
-        
-        if poc_velocity < 2 and poc_current < 90:
-            risk_factors.append({
-                'type': 'Schedule Risk',
-                'severity': 'High',
-                'description': f'Low POC velocity: {poc_velocity:.1f}%/month',
-                'impact': 'Medium',
-                'recommendation': 'Resource reallocation and schedule acceleration'
-            })
-        
-        # Cash flow risks
-        quarterly_data = project_data.get('cash_flow_quarterly', {})
-        if quarterly_data and isinstance(quarterly_data, dict):
-            negative_quarters = sum(1 for q in quarterly_data.values() if isinstance(q, dict) and q.get('fct_n', 0) < 0)
-            total_quarters = len(quarterly_data)
-            if total_quarters > 0 and negative_quarters > total_quarters * 0.3:
-                risk_factors.append({
-                    'type': 'Cash Flow',
-                    'severity': 'High',
-                    'description': f'Multiple negative cash flow quarters: {negative_quarters}/{total_quarters}',
-                    'impact': 'High',
-                    'recommendation': 'Cash flow optimization and milestone acceleration'
-                })
-        
-        # Revenue risks
-        revenue_current = float(safe_get_value(project_data, 'revenues', 'Revenues', 'n_ptd') or 0)
-        revenue_previous = float(safe_get_value(project_data, 'revenues', 'Revenues', 'n1_ptd') or 0)
-        revenue_variance = calculate_period_variance(revenue_current, revenue_previous)
-        
-        if revenue_variance < -15:
-            risk_factors.append({
-                'type': 'Revenue Risk',
-                'severity': 'Critical',
-                'description': f'Significant revenue decline: {revenue_variance:.1f}%',
-                'impact': 'High',
-                'recommendation': 'Revenue recovery plan and stakeholder engagement'
-            })
-        
-        # Work package risks
-        work_packages = project_data.get('work_packages', {})
-        if work_packages and isinstance(work_packages, dict):
-            high_variance_wps = []
-            for wp in work_packages.values():
-                if isinstance(wp, dict):
-                    variance = wp.get('variance_pct', 0)
-                    description = str(wp.get('description', '')).lower()
-                    if variance > 15 and not ('risk' in description and 'contingenc' in description):
-                        high_variance_wps.append(wp)
-            
-            if len(high_variance_wps) > 3:
-                risk_factors.append({
-                    'type': 'Work Package Risk',
-                    'severity': 'High',
-                    'description': f'{len(high_variance_wps)} work packages with >15% variance',
-                    'impact': 'High',
-                    'recommendation': 'Detailed work package review and corrective actions'
-                })
-        
-    except Exception as e:
-        # Log the error but don't add it as a risk
-        st.warning(f"Risk assessment error: {str(e)}")
-    
-    # Validate all risk factors before returning
-    validated_risks = []
-    for risk in risk_factors:
-        validated_risk = validate_risk_entry(risk)
-        if validated_risk:
-            validated_risks.append(validated_risk)
-    
-    return validated_risks
-    
+        return None   
 
 # ================================================================================
 # COMPREHENSIVE DASHBOARD RENDERING FUNCTIONS (SIMPLIFIED)
@@ -3478,6 +4001,7 @@ def render_risk_mitigation_recommendations(all_risks, risk_summary):
     for recommendation in portfolio_recommendations:
         st.info(recommendation)
 
+
 def render_portfolio_revenue_analytics(portfolio_data):
     """Render comprehensive portfolio revenue analytics - ENHANCED VERSION"""
     st.markdown("## 📊 Portfolio Revenue Analytics Dashboard")
@@ -3485,476 +4009,592 @@ def render_portfolio_revenue_analytics(portfolio_data):
     # Debug mode for data verification
     debug_mode = st.checkbox("Show Revenue Data Debug Info", value=False, key="revenue_debug")
     
-    # Collect available quarters across all projects
-    available_quarters = set()
-    for project_id, project in portfolio_data.items():
-        quarterly_data = project['data'].get('quarterly', {})
-        for quarter in quarterly_data.keys():
-            if quarter != 'Total':  # Exclude 'Total' entry
-                available_quarters.add(quarter)
+    # Create tabs for different views
+    tab1, tab2, tab3 = st.tabs(["📅 Quarterly View", "📈 Multi-Year Projection", "🎯 Forecast Accuracy"])
     
-    available_quarters = sorted(list(available_quarters))
-    
-    if not available_quarters:
-        st.warning("⚠️ No quarterly revenue data found in the uploaded files.")
-        st.info("Please ensure your Excel templates contain quarterly revenue data in the 'Project Revenues' sheet.")
-        return
-    
-    # Quarter selector for focused analysis
-    st.markdown("### 🎯 Quarter Selection")
-    col_q1, col_q2, col_q3 = st.columns([2, 3, 5])
-    
-    with col_q1:
-        selected_quarter = st.selectbox(
-            "Select Quarter for Analysis",
-            available_quarters,
-            index=len(available_quarters)-1 if available_quarters else 0,  # Default to latest quarter
-            help="Choose which quarter to analyze for revenue performance"
-        )
-    
-    with col_q2:
-        st.info(f"📅 Analyzing: **{selected_quarter}**")
-    
-    # Collect and validate quarterly data
-    portfolio_quarters = {'Q1': [], 'Q2': [], 'Q3': [], 'Q4': []}
-    project_performance = []
-    projects_with_data = []
-    
-    for project_id, project in portfolio_data.items():
-        quarterly_data = project['data'].get('quarterly', {})
-        revenues_data = project['data'].get('revenues', {})
-        contract_value = safe_get_value(project['data'], 'revenues', 'Contract Price', 'n_ptd')
+    with tab1:
+        # EXISTING QUARTERLY ANALYSIS CODE
+        # Collect available quarters across all projects
+        available_quarters = set()
+        for project_id, project in portfolio_data.items():
+            quarterly_data = project['data'].get('quarterly', {})
+            for quarter in quarterly_data.keys():
+                if quarter != 'Total':  # Exclude 'Total' entry
+                    available_quarters.add(quarter)
         
-        if debug_mode:
-            st.write(f"**Project {project_id}:**")
-            st.write(f"- Contract Value: {contract_value:,.0f}")
-            st.write(f"- Quarterly Data Available: {bool(quarterly_data)}")
-            if quarterly_data:
-                st.json(quarterly_data)
+        available_quarters = sorted(list(available_quarters))
         
-        # Validate data exists and is meaningful
-        if quarterly_data and contract_value > 0:
-            total_actual = 0
-            total_budget = 0
-            has_valid_data = False
+        if not available_quarters:
+            st.warning("⚠️ No quarterly revenue data found in the uploaded files.")
+            st.info("Please ensure your Excel templates contain quarterly revenue data in the 'Project Revenues' sheet.")
+            return
+        
+        # Quarter selector for focused analysis
+        st.markdown("### 🎯 Quarter Selection")
+        col_q1, col_q2, col_q3 = st.columns([2, 3, 5])
+        
+        with col_q1:
+            selected_quarter = st.selectbox(
+                "Select Quarter for Analysis",
+                available_quarters,
+                index=len(available_quarters)-1 if available_quarters else 0,  # Default to latest quarter
+                help="Choose which quarter to analyze for revenue performance"
+            )
+        
+        with col_q2:
+            st.info(f"📅 Analyzing: **{selected_quarter}**")
+        
+        # Collect and validate quarterly data
+        portfolio_quarters = {'Q1': [], 'Q2': [], 'Q3': [], 'Q4': []}
+        project_performance = []
+        projects_with_data = []
+        
+        for project_id, project in portfolio_data.items():
+            quarterly_data = project['data'].get('quarterly', {})
+            revenues_data = project['data'].get('revenues', {})
+            contract_value = safe_get_value(project['data'], 'revenues', 'Contract Price', 'n_ptd')
             
-            # Collect data for all quarters (for other visualizations)
-            for quarter in ['Q1', 'Q2', 'Q3', 'Q4']:
-                q_data = quarterly_data.get(quarter, {})
+            if debug_mode:
+                st.write(f"**Project {project_id}:**")
+                st.write(f"- Contract Value: {contract_value:,.0f}")
+                st.write(f"- Quarterly Data Available: {bool(quarterly_data)}")
+                if quarterly_data:
+                    st.json(quarterly_data)
+            
+            # Validate data exists and is meaningful
+            if quarterly_data and contract_value > 0:
+                total_actual = 0
+                total_budget = 0
+                has_valid_data = False
                 
-                # Try different field names based on template version
-                actual = q_data.get('actuals', 0) or q_data.get('actual', 0) or q_data.get('revenue', 0)
-                budget = q_data.get('budget', 0) or q_data.get('planned', 0)
+                # Collect data for all quarters (for other visualizations)
+                for quarter in ['Q1', 'Q2', 'Q3', 'Q4']:
+                    q_data = quarterly_data.get(quarter, {})
+                    
+                    # Try different field names based on template version
+                    actual = q_data.get('actuals', 0) or q_data.get('actual', 0) or q_data.get('revenue', 0)
+                    budget = q_data.get('budget', 0) or q_data.get('planned', 0)
+                    
+                    # If no budget, use gap_to_close + actuals as approximation
+                    if budget == 0 and 'gap_to_close' in q_data:
+                        budget = actual + q_data.get('gap_to_close', 0)
+                    
+                    if actual > 0 or budget > 0:
+                        has_valid_data = True
+                    
+                    portfolio_quarters[quarter].append({
+                        'project_id': project_id,
+                        'project_name': project['name'][:25],
+                        'actual': actual,
+                        'budget': budget,
+                        'variance': q_data.get('delta_pct', 0),
+                        'contract_value': contract_value
+                    })
+                    
+                    total_actual += actual
+                    total_budget += budget
+                
+                # Get specific quarter data for performance calculation
+                selected_q_data = quarterly_data.get(selected_quarter, {})
+                q_actual = selected_q_data.get('actuals', 0) or selected_q_data.get('actual', 0) or selected_q_data.get('revenue', 0)
+                q_budget = selected_q_data.get('budget', 0) or selected_q_data.get('planned', 0)
                 
                 # If no budget, use gap_to_close + actuals as approximation
-                if budget == 0 and 'gap_to_close' in q_data:
-                    budget = actual + q_data.get('gap_to_close', 0)
+                if q_budget == 0 and 'gap_to_close' in selected_q_data:
+                    q_budget = q_actual + selected_q_data.get('gap_to_close', 0)
                 
-                if actual > 0 or budget > 0:
-                    has_valid_data = True
+                # Only include projects with valid data for selected quarter
+                if q_budget > 0:  # Only include if there's a budget for the quarter
+                    projects_with_data.append(project_id)
+                    
+                    # Calculate quarterly performance
+                    q_performance = (q_actual / q_budget * 100) if q_budget > 0 else 0
+                    
+                    project_performance.append({
+                        'project_id': project_id,
+                        'project_name': project['name'],
+                        'contract_value': contract_value,
+                        'quarterly_actual': q_actual,
+                        'quarterly_budget': q_budget,
+                        'quarterly_performance': q_performance,
+                        'total_actual': total_actual,  # Keep for other charts
+                        'total_budget': total_budget,   # Keep for other charts
+                        'quarter': selected_quarter
+                    })
+        
+        if not projects_with_data:
+            st.warning(f"⚠️ No valid revenue data found for {selected_quarter}.")
+            st.info("Please select a different quarter or ensure your Excel templates contain quarterly budget data.")
+            return
+        
+        # Create visualizations with enhanced styling
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # 1. Enhanced Stacked Bar Chart (keep existing for all quarters overview)
+            st.markdown("#### 📊 Quarterly Revenue Distribution by Project")
+            
+            fig1 = go.Figure()
+            
+            # Create stacked bars for each project
+            for i, quarter in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+                q_revenues = [item for item in portfolio_quarters[quarter] if item['project_id'] in projects_with_data]
                 
-                portfolio_quarters[quarter].append({
-                    'project_id': project_id,
-                    'project_name': project['name'][:25],
-                    'actual': actual,
-                    'budget': budget,
-                    'variance': q_data.get('delta_pct', 0),
-                    'contract_value': contract_value
-                })
+                # Use different shades of blue for quarters
+                colors = ['#084594', '#2171b5', '#4292c6', '#6baed6']
                 
-                total_actual += actual
-                total_budget += budget
+                fig1.add_trace(go.Bar(
+                    name=quarter,
+                    x=[item['project_id'] for item in q_revenues],
+                    y=[item['actual']/1000 for item in q_revenues],
+                    text=[f"{item['actual']/1000:.0f}" if item['actual'] > 0 else "" for item in q_revenues],
+                    textposition='inside',
+                    marker_color=colors[i],
+                    hovertemplate='%{x}<br>%{fullData.name}: CHF %{y:.1f}K<br>Budget: CHF %{customdata:.1f}K<extra></extra>',
+                    customdata=[item['budget']/1000 for item in q_revenues]
+                ))
             
-            # Get specific quarter data for performance calculation
-            selected_q_data = quarterly_data.get(selected_quarter, {})
-            q_actual = selected_q_data.get('actuals', 0) or selected_q_data.get('actual', 0) or selected_q_data.get('revenue', 0)
-            q_budget = selected_q_data.get('budget', 0) or selected_q_data.get('planned', 0)
+            fig1.update_layout(
+                barmode='stack',
+                height=450,
+                xaxis_title='Projects',
+                yaxis_title='Revenue (CHF Thousands)',
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                plot_bgcolor='rgba(0,0,0,0)',
+                bargap=0.15,
+                bargroupgap=0.1
+            )
             
-            # If no budget, use gap_to_close + actuals as approximation
-            if q_budget == 0 and 'gap_to_close' in selected_q_data:
-                q_budget = q_actual + selected_q_data.get('gap_to_close', 0)
+            fig1.update_xaxes(tickangle=-45)
             
-            # Only include projects with valid data for selected quarter
-            if q_budget > 0:  # Only include if there's a budget for the quarter
-                projects_with_data.append(project_id)
+            st.plotly_chart(fig1, use_container_width=True)
+        
+        with col2:
+            # 2. ENHANCED Quarterly Performance Scatter Plot
+            st.markdown(f"#### 🎯 {selected_quarter} Revenue Performance vs Contract Size")
+            
+            fig2 = go.Figure()
+            
+            # Filter for projects with valid quarterly performance
+            valid_projects = [p for p in project_performance if p['quarterly_performance'] > 0 or p['quarterly_budget'] > 0]
+            
+            if valid_projects:
+                performances = [p['quarterly_performance'] for p in valid_projects]
+                colors = ['#00a651' if p >= 95 else '#ff9900' if p >= 85 else '#ee2724' for p in performances]
                 
-                # Calculate quarterly performance
-                q_performance = (q_actual / q_budget * 100) if q_budget > 0 else 0
+                # Calculate bubble sizes based on quarterly revenue (not contract value)
+                max_q_revenue = max([p['quarterly_actual'] for p in valid_projects]) if valid_projects else 1
                 
-                project_performance.append({
-                    'project_id': project_id,
-                    'project_name': project['name'],
-                    'contract_value': contract_value,
-                    'quarterly_actual': q_actual,
-                    'quarterly_budget': q_budget,
-                    'quarterly_performance': q_performance,
-                    'total_actual': total_actual,  # Keep for other charts
-                    'total_budget': total_budget,   # Keep for other charts
-                    'quarter': selected_quarter
-                })
-    
-    if not projects_with_data:
-        st.warning(f"⚠️ No valid revenue data found for {selected_quarter}.")
-        st.info("Please select a different quarter or ensure your Excel templates contain quarterly budget data.")
-        return
-    
-    # Create visualizations with enhanced styling
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # 1. Enhanced Stacked Bar Chart (keep existing for all quarters overview)
-        st.markdown("#### 📊 Quarterly Revenue Distribution by Project")
-        
-        fig1 = go.Figure()
-        
-        # Create stacked bars for each project
-        for i, quarter in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-            q_revenues = [item for item in portfolio_quarters[quarter] if item['project_id'] in projects_with_data]
-            
-            # Use different shades of blue for quarters
-            colors = ['#084594', '#2171b5', '#4292c6', '#6baed6']
-            
-            fig1.add_trace(go.Bar(
-                name=quarter,
-                x=[item['project_id'] for item in q_revenues],
-                y=[item['actual']/1000 for item in q_revenues],
-                text=[f"{item['actual']/1000:.0f}" if item['actual'] > 0 else "" for item in q_revenues],
-                textposition='inside',
-                marker_color=colors[i],
-                hovertemplate='%{x}<br>%{fullData.name}: CHF %{y:.1f}K<br>Budget: CHF %{customdata:.1f}K<extra></extra>',
-                customdata=[item['budget']/1000 for item in q_revenues]
-            ))
-        
-        fig1.update_layout(
-            barmode='stack',
-            height=450,
-            xaxis_title='Projects',
-            yaxis_title='Revenue (CHF Thousands)',
-            showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            plot_bgcolor='rgba(0,0,0,0)',
-            bargap=0.15,
-            bargroupgap=0.1
-        )
-        
-        fig1.update_xaxes(tickangle=-45)
-        
-        st.plotly_chart(fig1, use_container_width=True)
-    
-    with col2:
-        # 2. ENHANCED Quarterly Performance Scatter Plot
-        st.markdown(f"#### 🎯 {selected_quarter} Revenue Performance vs Contract Size")
-        
-        fig2 = go.Figure()
-        
-        # Filter for projects with valid quarterly performance
-        valid_projects = [p for p in project_performance if p['quarterly_performance'] > 0 or p['quarterly_budget'] > 0]
-        
-        if valid_projects:
-            performances = [p['quarterly_performance'] for p in valid_projects]
-            colors = ['#00a651' if p >= 95 else '#ff9900' if p >= 85 else '#ee2724' for p in performances]
-            
-            # Calculate bubble sizes based on quarterly revenue (not contract value)
-            max_q_revenue = max([p['quarterly_actual'] for p in valid_projects]) if valid_projects else 1
-            
-            # Prevent division by zero
-            if max_q_revenue == 0:
-                # If all projects have zero actual revenue, use budget for sizing
-                max_q_budget = max([p['quarterly_budget'] for p in valid_projects]) if valid_projects else 1
-                if max_q_budget > 0:
-                    bubble_sizes = [max(15, min(50, (p['quarterly_budget']/max_q_budget)*50)) for p in valid_projects]
-                    size_note = "Bubble size = Quarterly Budget (no actuals yet)"
+                # Prevent division by zero
+                if max_q_revenue == 0:
+                    # If all projects have zero actual revenue, use budget for sizing
+                    max_q_budget = max([p['quarterly_budget'] for p in valid_projects]) if valid_projects else 1
+                    if max_q_budget > 0:
+                        bubble_sizes = [max(15, min(50, (p['quarterly_budget']/max_q_budget)*50)) for p in valid_projects]
+                        size_note = "Bubble size = Quarterly Budget (no actuals yet)"
+                    else:
+                        # If both actual and budget are zero, use uniform size
+                        bubble_sizes = [25 for p in valid_projects]  # Default size
+                        size_note = "Uniform bubble size (no data)"
                 else:
-                    # If both actual and budget are zero, use uniform size
-                    bubble_sizes = [25 for p in valid_projects]  # Default size
-                    size_note = "Uniform bubble size (no data)"
+                    bubble_sizes = [max(15, min(50, (p['quarterly_actual']/max_q_revenue)*50)) for p in valid_projects]
+                    size_note = "Bubble size = Quarterly Revenue"
+                
+                fig2.add_trace(go.Scatter(
+                    x=[p['contract_value']/1000 for p in valid_projects],
+                    y=[p['quarterly_performance'] for p in valid_projects],
+                    mode='markers+text',
+                    marker=dict(
+                        size=bubble_sizes,
+                        color=colors,
+                        opacity=0.7,
+                        line=dict(width=2, color='white')
+                    ),
+                    text=[p['project_id'] for p in valid_projects],
+                    textposition='top center',
+                    textfont=dict(size=10),
+                    customdata=[[p['quarterly_actual']/1000, p['quarterly_budget']/1000, p['quarterly_performance']] 
+                               for p in valid_projects],
+                    hovertemplate='<b>%{text}</b><br>Contract: CHF %{x:.2f}M<br>' + 
+                                 f'{selected_quarter} Performance: %{{customdata[2]:.1f}}%<br>' +
+                                 f'{selected_quarter} Actual: CHF %{{customdata[0]:.1f}}K<br>' +
+                                 f'{selected_quarter} Budget: CHF %{{customdata[1]:.1f}}K<br>' +
+                                 f'{size_note}<extra></extra>',
+                    name=''
+                ))
+                
+                # Add reference lines
+                fig2.add_hline(y=100, line_dash="dash", line_color="green", 
+                              annotation_text="Target", annotation_position="right")
+                fig2.add_hline(y=90, line_dash="dot", line_color="orange", 
+                              annotation_text="Warning", annotation_position="right")
+                
+                # Add quadrant shading
+                fig2.add_hrect(y0=95, y1=150, fillcolor="green", opacity=0.1, line_width=0)
+                fig2.add_hrect(y0=85, y1=95, fillcolor="orange", opacity=0.1, line_width=0)
+                fig2.add_hrect(y0=0, y1=85, fillcolor="red", opacity=0.1, line_width=0)
+            
             else:
-                bubble_sizes = [max(15, min(50, (p['quarterly_actual']/max_q_revenue)*50)) for p in valid_projects]
-                size_note = "Bubble size = Quarterly Revenue"
+                # No valid projects for this quarter
+                st.info(f"No projects with budget data for {selected_quarter}")
             
-            fig2.add_trace(go.Scatter(
-                x=[p['contract_value']/1000 for p in valid_projects],
-                y=[p['quarterly_performance'] for p in valid_projects],
-                mode='markers+text',
-                marker=dict(
-                    size=bubble_sizes,
-                    color=colors,
-                    opacity=0.7,
-                    line=dict(width=2, color='white')
-                ),
-                text=[p['project_id'] for p in valid_projects],
-                textposition='top center',
-                textfont=dict(size=10),
-                customdata=[[p['quarterly_actual']/1000, p['quarterly_budget']/1000, p['quarterly_performance']] 
-                           for p in valid_projects],
-                hovertemplate='<b>%{text}</b><br>Contract: CHF %{x:.2f}M<br>' + 
-                             f'{selected_quarter} Performance: %{{customdata[2]:.1f}}%<br>' +
-                             f'{selected_quarter} Actual: CHF %{{customdata[0]:.1f}}K<br>' +
-                             f'{selected_quarter} Budget: CHF %{{customdata[1]:.1f}}K<br>' +
-                             f'{size_note}<extra></extra>',
-                name=''
-            ))
+            fig2.update_layout(
+                height=450,
+                xaxis_title='Contract Value (CHF Millions)',
+                yaxis_title=f'{selected_quarter} Revenue Performance %',
+                showlegend=False,
+                plot_bgcolor='rgba(0,0,0,0)',
+                xaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False),
+                yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, range=[0, 150]),
+                title_font_size=14
+            )
             
-            # Add reference lines
-            fig2.add_hline(y=100, line_dash="dash", line_color="green", 
-                          annotation_text="Target", annotation_position="right")
-            fig2.add_hline(y=90, line_dash="dot", line_color="orange", 
-                          annotation_text="Warning", annotation_position="right")
+            st.plotly_chart(fig2, use_container_width=True)
+        
+        # 3. Enhanced Time Series with quarterly focus
+        st.markdown("#### 📈 Portfolio Revenue Trend Analysis")
+        
+        # Add quarter performance summary
+        selected_q_metrics = [p for p in project_performance if p['quarter'] == selected_quarter]
+        if selected_q_metrics:
+            total_q_actual = sum([p['quarterly_actual'] for p in selected_q_metrics])
+            total_q_budget = sum([p['quarterly_budget'] for p in selected_q_metrics])
+            overall_q_performance = (total_q_actual / total_q_budget * 100) if total_q_budget > 0 else 0
             
-            # Add quadrant shading
-            fig2.add_hrect(y0=95, y1=150, fillcolor="green", opacity=0.1, line_width=0)
-            fig2.add_hrect(y0=85, y1=95, fillcolor="orange", opacity=0.1, line_width=0)
-            fig2.add_hrect(y0=0, y1=85, fillcolor="red", opacity=0.1, line_width=0)
-	    
-        else:
-            # No valid projects for this quarter
-            st.info(f"No projects with budget data for {selected_quarter}")
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            with col_m1:
+                st.metric(f"{selected_quarter} Budget", format_currency_millions(total_q_budget))
+            with col_m2:
+                st.metric(f"{selected_quarter} Actual", format_currency_millions(total_q_actual))
+            with col_m3:
+                perf_delta = overall_q_performance - 100
+                st.metric(f"{selected_quarter} Performance", f"{overall_q_performance:.1f}%", 
+                         f"{perf_delta:+.1f}%")
+            with col_m4:
+                on_target_count = len([p for p in selected_q_metrics if p['quarterly_performance'] >= 95])
+                st.metric("Projects On Target", f"{on_target_count}/{len(selected_q_metrics)}")
         
-        fig2.update_layout(
-            height=450,
-            xaxis_title='Contract Value (CHF Millions)',
-            yaxis_title=f'{selected_quarter} Revenue Performance %',
-            showlegend=False,
-            plot_bgcolor='rgba(0,0,0,0)',
-            xaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False),
-            yaxis=dict(showgrid=True, gridcolor='lightgray', zeroline=False, range=[0, 150]),
-            title_font_size=14
-        )
-        
-        st.plotly_chart(fig2, use_container_width=True)
-    
-    # 3. Enhanced Time Series with quarterly focus
-    st.markdown("#### 📈 Portfolio Revenue Trend Analysis")
-    
-    # Add quarter performance summary
-    selected_q_metrics = [p for p in project_performance if p['quarter'] == selected_quarter]
-    if selected_q_metrics:
-        total_q_actual = sum([p['quarterly_actual'] for p in selected_q_metrics])
-        total_q_budget = sum([p['quarterly_budget'] for p in selected_q_metrics])
-        overall_q_performance = (total_q_actual / total_q_budget * 100) if total_q_budget > 0 else 0
-        
-        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-        with col_m1:
-            st.metric(f"{selected_quarter} Budget", format_currency_millions(total_q_budget))
-        with col_m2:
-            st.metric(f"{selected_quarter} Actual", format_currency_millions(total_q_actual))
-        with col_m3:
-            perf_delta = overall_q_performance - 100
-            st.metric(f"{selected_quarter} Performance", f"{overall_q_performance:.1f}%", 
-                     f"{perf_delta:+.1f}%")
-        with col_m4:
-            on_target_count = len([p for p in selected_q_metrics if p['quarterly_performance'] >= 95])
-            st.metric("Projects On Target", f"{on_target_count}/{len(selected_q_metrics)}")
-    
-    quarterly_totals = []
-    for quarter in ['Q1', 'Q2', 'Q3', 'Q4']:
-        q_data = [item for item in portfolio_quarters[quarter] if item['project_id'] in projects_with_data]
-        total_actual = sum([item['actual'] for item in q_data])
-        total_budget = sum([item['budget'] for item in q_data])
-        
-        # Calculate variance properly
-        if total_budget > 0:
-            variance = ((total_actual - total_budget) / total_budget * 100)
-        else:
-            variance = 0
+        quarterly_totals = []
+        for quarter in ['Q1', 'Q2', 'Q3', 'Q4']:
+            q_data = [item for item in portfolio_quarters[quarter] if item['project_id'] in projects_with_data]
+            total_actual = sum([item['actual'] for item in q_data])
+            total_budget = sum([item['budget'] for item in q_data])
             
-        quarterly_totals.append({
-            'quarter': quarter,
-            'actual': total_actual,
-            'budget': total_budget,
-            'variance': variance,
-            'is_selected': quarter == selected_quarter
-        })
-    
-    # Create enhanced subplot figure
-    fig3 = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=('Portfolio Revenue Trend', f'{selected_quarter} Performance Distribution'),
-        specs=[[{"secondary_y": True}, {"type": "bar"}]],
-        horizontal_spacing=0.12
-    )
-    
-    # Revenue trend with improved styling and selected quarter highlight
-    quarters_list = [q['quarter'] for q in quarterly_totals]
-    budget_colors = ['lightblue' if not q['is_selected'] else 'darkblue' for q in quarterly_totals]
-    actual_colors = ['darkblue' if not q['is_selected'] else 'darkgreen' for q in quarterly_totals]
-    
-    fig3.add_trace(go.Bar(
-        name='Budget',
-        x=quarters_list,
-        y=[q['budget']/1000000 for q in quarterly_totals],
-        marker_color=budget_colors,
-        opacity=0.7,
-        text=[f"{q['budget']/1000000:.2f}" for q in quarterly_totals],
-        textposition='outside',
-        texttemplate='%{text}M'
-    ), row=1, col=1)
-    
-    fig3.add_trace(go.Bar(
-        name='Actual',
-        x=quarters_list,
-        y=[q['actual']/1000000 for q in quarterly_totals],
-        marker_color=actual_colors,
-        text=[f"{q['actual']/1000000:.2f}" for q in quarterly_totals],
-        textposition='outside',
-        texttemplate='%{text}M'
-    ), row=1, col=1)
-    
-    # Add cumulative line with markers
-    cumulative_actual = []
-    cumulative_sum = 0
-    for q in quarterly_totals:
-        cumulative_sum += q['actual']/1000000
-        cumulative_actual.append(cumulative_sum)
-    
-    fig3.add_trace(go.Scatter(
-        name='Cumulative Actual',
-        x=quarters_list,
-        y=cumulative_actual,
-        mode='lines+markers+text',
-        line=dict(color='red', width=3),
-        marker=dict(size=10),
-        text=[f"{v:.1f}M" for v in cumulative_actual],
-        textposition='top center',
-        yaxis='y2'
-    ), row=1, col=1, secondary_y=True)
-    
-    # Performance distribution for selected quarter
-    if selected_q_metrics:
-        performance_ranges = {
-            '0-50%': len([p for p in selected_q_metrics if 0 <= p['quarterly_performance'] < 50]),
-            '50-85%': len([p for p in selected_q_metrics if 50 <= p['quarterly_performance'] < 85]),
-            '85-95%': len([p for p in selected_q_metrics if 85 <= p['quarterly_performance'] < 95]),
-            '95-100%': len([p for p in selected_q_metrics if 95 <= p['quarterly_performance'] <= 100]),
-            '>100%': len([p for p in selected_q_metrics if p['quarterly_performance'] > 100])
-        }
-        
-        fig3.add_trace(go.Bar(
-            name='Projects',
-            x=list(performance_ranges.keys()),
-            y=list(performance_ranges.values()),
-            marker_color=['red', 'orange', 'yellow', 'lightgreen', 'darkgreen'],
-            text=list(performance_ranges.values()),
-            textposition='outside',
-            showlegend=False
-        ), row=1, col=2)
-    
-    fig3.update_layout(
-        height=450,
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.2),
-        plot_bgcolor='rgba(0,0,0,0)',
-        title_text=f"Revenue Analysis with {selected_quarter} Focus"
-    )
-    
-    fig3.update_xaxes(title_text="Quarter", row=1, col=1)
-    fig3.update_xaxes(title_text="Performance Range", row=1, col=2)
-    fig3.update_yaxes(title_text="Revenue (CHF M)", row=1, col=1)
-    fig3.update_yaxes(title_text="Cumulative (CHF M)", secondary_y=True, row=1, col=1)
-    fig3.update_yaxes(title_text="Number of Projects", row=1, col=2)
-    
-    st.plotly_chart(fig3, use_container_width=True)
-    
-    # 4. Enhanced Project Ranking Table - Focused on Selected Quarter
-    st.markdown(f"#### 🏆 {selected_quarter} Project Performance Ranking")
-    
-    if selected_q_metrics:
-        # Create enhanced ranking dataframe
-        ranking_data = []
-        for i, p in enumerate(sorted(selected_q_metrics, key=lambda x: x['quarterly_performance'], reverse=True)):
-            # Determine performance status
-            if p['quarterly_performance'] >= 100:
-                perf_icon = '🌟'  # Exceeding
-            elif p['quarterly_performance'] >= 95:
-                perf_icon = '🟢'  # On target
-            elif p['quarterly_performance'] >= 85:
-                perf_icon = '🟡'  # Slightly below
+            # Calculate variance properly
+            if total_budget > 0:
+                variance = ((total_actual - total_budget) / total_budget * 100)
             else:
-                perf_icon = '🔴'  # Significantly below
-            
-            ranking_data.append({
-                'Rank': i + 1,
-                'Project': p['project_id'],
-                'Name': p['project_name'][:30] + '...' if len(p['project_name']) > 30 else p['project_name'],
-                'Contract Value': format_currency_millions(p['contract_value']),
-                f'{selected_quarter} Budget': format_currency_thousands(p['quarterly_budget']),
-                f'{selected_quarter} Actual': format_currency_thousands(p['quarterly_actual']),
-		f'{selected_quarter} Performance': p['quarterly_performance'],
-                'Variance': format_currency_thousands(p['quarterly_actual'] - p['quarterly_budget']),
-                'Status': perf_icon
+                variance = 0
+                
+            quarterly_totals.append({
+                'quarter': quarter,
+                'actual': total_actual,
+                'budget': total_budget,
+                'variance': variance,
+                'is_selected': quarter == selected_quarter
             })
         
-        df_ranking = pd.DataFrame(ranking_data)
-        
-        # Apply conditional formatting
-        st.dataframe(
-            df_ranking,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Rank": st.column_config.NumberColumn(width="small"),
-                "Status": st.column_config.TextColumn(width="small"),
-                f"{selected_quarter} Performance": st.column_config.ProgressColumn(
-                    help="Revenue achievement rate for selected quarter",
-                    format="%.1f%%",
-                    min_value=0,
-                    max_value=150,
-                ),
-            }
+        # Create enhanced subplot figure
+        fig3 = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=('Portfolio Revenue Trend', f'{selected_quarter} Performance Distribution'),
+            specs=[[{"secondary_y": True}, {"type": "bar"}]],
+            horizontal_spacing=0.12
         )
         
-        # Performance insights for selected quarter
-        st.markdown(f"### 💡 {selected_quarter} Performance Insights")
+        # Revenue trend with improved styling and selected quarter highlight
+        quarters_list = [q['quarter'] for q in quarterly_totals]
+        budget_colors = ['lightblue' if not q['is_selected'] else 'darkblue' for q in quarterly_totals]
+        actual_colors = ['darkblue' if not q['is_selected'] else 'darkgreen' for q in quarterly_totals]
         
-        col_i1, col_i2 = st.columns(2)
+        fig3.add_trace(go.Bar(
+            name='Budget',
+            x=quarters_list,
+            y=[q['budget']/1000000 for q in quarterly_totals],
+            marker_color=budget_colors,
+            opacity=0.7,
+            text=[f"{q['budget']/1000000:.2f}" for q in quarterly_totals],
+            textposition='outside',
+            texttemplate='%{text}M'
+        ), row=1, col=1)
         
-        with col_i1:
-            # Performance distribution
-            excellent_count = len([p for p in selected_q_metrics if p['quarterly_performance'] >= 100])
-            on_target_count = len([p for p in selected_q_metrics if 95 <= p['quarterly_performance'] < 100])
-            below_target_count = len([p for p in selected_q_metrics if p['quarterly_performance'] < 95])
-            
-            st.markdown(f"""
-            <div class="exec-summary">
-                <h4>📊 {selected_quarter} Performance Summary</h4>
-                <ul>
-                    <li><strong>Exceeding Target (≥100%):</strong> {excellent_count} projects</li>
-                    <li><strong>On Target (95-100%):</strong> {on_target_count} projects</li>
-                    <li><strong>Below Target (<95%):</strong> {below_target_count} projects</li>
-                    <li><strong>Overall Achievement:</strong> {overall_q_performance:.1f}%</li>
-                    <li><strong>Revenue Gap:</strong> {format_currency_thousands(total_q_actual - total_q_budget)}</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
+        fig3.add_trace(go.Bar(
+            name='Actual',
+            x=quarters_list,
+            y=[q['actual']/1000000 for q in quarterly_totals],
+            marker_color=actual_colors,
+            text=[f"{q['actual']/1000000:.2f}" for q in quarterly_totals],
+            textposition='outside',
+            texttemplate='%{text}M'
+        ), row=1, col=1)
         
-        with col_i2:
-            # Top and bottom performers
-            top_performers = sorted(selected_q_metrics, key=lambda x: x['quarterly_performance'], reverse=True)[:3]
-            bottom_performers = sorted(selected_q_metrics, key=lambda x: x['quarterly_performance'])[:3]
+        # Add cumulative line with markers
+        cumulative_actual = []
+        cumulative_sum = 0
+        for q in quarterly_totals:
+            cumulative_sum += q['actual']/1000000
+            cumulative_actual.append(cumulative_sum)
+        
+        fig3.add_trace(go.Scatter(
+            name='Cumulative Actual',
+            x=quarters_list,
+            y=cumulative_actual,
+            mode='lines+markers+text',
+            line=dict(color='red', width=3),
+            marker=dict(size=10),
+            text=[f"{v:.1f}M" for v in cumulative_actual],
+            textposition='top center',
+            yaxis='y2'
+        ), row=1, col=1, secondary_y=True)
+        
+        # Performance distribution for selected quarter
+        if selected_q_metrics:
+            performance_ranges = {
+                '0-50%': len([p for p in selected_q_metrics if 0 <= p['quarterly_performance'] < 50]),
+                '50-85%': len([p for p in selected_q_metrics if 50 <= p['quarterly_performance'] < 85]),
+                '85-95%': len([p for p in selected_q_metrics if 85 <= p['quarterly_performance'] < 95]),
+                '95-100%': len([p for p in selected_q_metrics if 95 <= p['quarterly_performance'] <= 100]),
+                '>100%': len([p for p in selected_q_metrics if p['quarterly_performance'] > 100])
+            }
             
-            recommendations = []
-            if overall_q_performance < 95:
-                recommendations.append(f"🔴 **Revenue Gap Alert:** {selected_quarter} is {95-overall_q_performance:.1f}% below target")
-            if below_target_count > len(selected_q_metrics) * 0.5:
-                recommendations.append(f"⚠️ **Portfolio Risk:** Over 50% of projects below target in {selected_quarter}")
-            if excellent_count > 0:
-                recommendations.append(f"🌟 **Best Practices:** Study {excellent_count} exceeding projects for lessons learned")
+            fig3.add_trace(go.Bar(
+                name='Projects',
+                x=list(performance_ranges.keys()),
+                y=list(performance_ranges.values()),
+                marker_color=['red', 'orange', 'yellow', 'lightgreen', 'darkgreen'],
+                text=list(performance_ranges.values()),
+                textposition='outside',
+                showlegend=False
+            ), row=1, col=2)
+        
+        fig3.update_layout(
+            height=450,
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2),
+            plot_bgcolor='rgba(0,0,0,0)',
+            title_text=f"Revenue Analysis with {selected_quarter} Focus"
+        )
+        
+        fig3.update_xaxes(title_text="Quarter", row=1, col=1)
+        fig3.update_xaxes(title_text="Performance Range", row=1, col=2)
+        fig3.update_yaxes(title_text="Revenue (CHF M)", row=1, col=1)
+        fig3.update_yaxes(title_text="Cumulative (CHF M)", secondary_y=True, row=1, col=1)
+        fig3.update_yaxes(title_text="Number of Projects", row=1, col=2)
+        
+        st.plotly_chart(fig3, use_container_width=True)
+        
+        # 4. Enhanced Project Ranking Table - Focused on Selected Quarter
+        st.markdown(f"#### 🏆 {selected_quarter} Project Performance Ranking")
+        
+        if selected_q_metrics:
+            # Create enhanced ranking dataframe
+            ranking_data = []
+            for i, p in enumerate(sorted(selected_q_metrics, key=lambda x: x['quarterly_performance'], reverse=True)):
+                # Determine performance status
+                if p['quarterly_performance'] >= 100:
+                    perf_icon = '🌟'  # Exceeding
+                elif p['quarterly_performance'] >= 95:
+                    perf_icon = '🟢'  # On target
+                elif p['quarterly_performance'] >= 85:
+                    perf_icon = '🟡'  # Slightly below
+                else:
+                    perf_icon = '🔴'  # Significantly below
+                
+                ranking_data.append({
+                    'Rank': i + 1,
+                    'Project': p['project_id'],
+                    'Name': p['project_name'][:30] + '...' if len(p['project_name']) > 30 else p['project_name'],
+                    'Contract Value': format_currency_millions(p['contract_value']),
+                    f'{selected_quarter} Budget': format_currency_thousands(p['quarterly_budget']),
+                    f'{selected_quarter} Actual': format_currency_thousands(p['quarterly_actual']),
+                    f'{selected_quarter} Performance': p['quarterly_performance'],
+                    'Variance': format_currency_thousands(p['quarterly_actual'] - p['quarterly_budget']),
+                    'Status': perf_icon
+                })
             
-            recommendations.extend([
-                "📊 **Focus Areas:** Prioritize bottom 3 performers for intervention",
-                "📈 **Revenue Recovery:** Implement catch-up plans for below-target projects"
-            ])
+            df_ranking = pd.DataFrame(ranking_data)
             
-            st.markdown(f"""
-            <div class="exec-summary">
-                <h4>🎯 Strategic Recommendations</h4>
-                <ul>
-                    {''.join([f'<li>{rec}</li>' for rec in recommendations])}
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
-
-
+            # Apply conditional formatting
+            st.dataframe(
+                df_ranking,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Rank": st.column_config.NumberColumn(width="small"),
+                    "Status": st.column_config.TextColumn(width="small"),
+                    f"{selected_quarter} Performance": st.column_config.ProgressColumn(
+                        help="Revenue achievement rate for selected quarter",
+                        format="%.1f%%",
+                        min_value=0,
+                        max_value=150,
+                    ),
+                }
+            )
+            
+            # Performance insights for selected quarter
+            st.markdown(f"### 💡 {selected_quarter} Performance Insights")
+            
+            col_i1, col_i2 = st.columns(2)
+            
+            with col_i1:
+                # Performance distribution
+                excellent_count = len([p for p in selected_q_metrics if p['quarterly_performance'] >= 100])
+                on_target_count = len([p for p in selected_q_metrics if 95 <= p['quarterly_performance'] < 100])
+                below_target_count = len([p for p in selected_q_metrics if p['quarterly_performance'] < 95])
+                
+                st.markdown(f"""
+                <div class="exec-summary">
+                    <h4>📊 {selected_quarter} Performance Summary</h4>
+                    <ul>
+                        <li><strong>Exceeding Target (≥100%):</strong> {excellent_count} projects</li>
+                        <li><strong>On Target (95-100%):</strong> {on_target_count} projects</li>
+                        <li><strong>Below Target (<95%):</strong> {below_target_count} projects</li>
+                        <li><strong>Overall Achievement:</strong> {overall_q_performance:.1f}%</li>
+                        <li><strong>Revenue Gap:</strong> {format_currency_thousands(total_q_actual - total_q_budget)}</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col_i2:
+                # Top and bottom performers
+                top_performers = sorted(selected_q_metrics, key=lambda x: x['quarterly_performance'], reverse=True)[:3]
+                bottom_performers = sorted(selected_q_metrics, key=lambda x: x['quarterly_performance'])[:3]
+                
+                recommendations = []
+                if overall_q_performance < 95:
+                    recommendations.append(f"🔴 **Revenue Gap Alert:** {selected_quarter} is {95-overall_q_performance:.1f}% below target")
+                if below_target_count > len(selected_q_metrics) * 0.5:
+                    recommendations.append(f"⚠️ **Portfolio Risk:** Over 50% of projects below target in {selected_quarter}")
+                if excellent_count > 0:
+                    recommendations.append(f"🌟 **Best Practices:** Study {excellent_count} exceeding projects for lessons learned")
+                
+                recommendations.extend([
+                    "📊 **Focus Areas:** Prioritize bottom 3 performers for intervention",
+                    "📈 **Revenue Recovery:** Implement catch-up plans for below-target projects"
+                ])
+                
+                st.markdown(f"""
+                <div class="exec-summary">
+                    <h4>🎯 Strategic Recommendations</h4>
+                    <ul>
+                        {''.join([f'<li>{rec}</li>' for rec in recommendations])}
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    with tab2:
+        # NEW: Multi-year projection analysis
+        st.markdown("### 📊 Multi-Year Revenue Projections")
+        
+        # Check if we have yearly data
+        projects_with_yearly_data = []
+        for project_id, project in portfolio_data.items():
+            if project['data'].get('yearly_revenue_projections'):
+                projects_with_yearly_data.append(project_id)
+        
+        if not projects_with_yearly_data:
+            st.warning("⚠️ No multi-year revenue projection data found in the uploaded files.")
+            st.info("Please ensure your Excel templates contain yearly revenue projections in the '2_Project_Revenues' sheet.")
+            return
+        
+        st.success(f"✅ Found yearly projections for {len(projects_with_yearly_data)} projects")
+        
+        # Aggregate yearly data across portfolio
+        portfolio_yearly = {}
+        
+        for project_id, project in portfolio_data.items():
+            yearly_projections = project['data'].get('yearly_revenue_projections', {})
+            revenue_metrics = project['data'].get('revenue_metrics', {})
+            
+            for year, year_data in yearly_projections.items():
+                if year not in portfolio_yearly:
+                    portfolio_yearly[year] = {}
+                
+                portfolio_yearly[year][project_id] = {
+                    'total_revenue': year_data['total_revenue'],
+                    'actual_prior_fy': year_data['actual_prior_fy'],
+                    'revenue_rfc': year_data['revenue_rfc'],
+                    'poc_percentage': year_data['poc_percentage']
+                }
+        
+        # KPI Cards for multi-year view
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            total_pipeline = sum(
+                project['data'].get('revenue_metrics', {}).get('total_rfc', 0)
+                for project in portfolio_data.values()
+            )
+            st.metric("Total Revenue Pipeline (RFC)", format_currency_millions(total_pipeline))
+        
+        with col2:
+            years_to_complete = [
+                project['data'].get('revenue_metrics', {}).get('years_to_complete', 0)
+                for project in portfolio_data.values()
+                if project['data'].get('revenue_metrics', {}).get('years_to_complete', 0) > 0
+            ]
+            if years_to_complete:
+                avg_years = np.mean(years_to_complete)
+                st.metric("Avg. Years to Complete", f"{avg_years:.1f}")
+            else:
+                st.metric("Avg. Years to Complete", "N/A")
+        
+        with col3:
+            # Revenue concentration risk
+            yearly_totals = {}
+            for year, projects in portfolio_yearly.items():
+                yearly_totals[year] = sum(p['total_revenue'] for p in projects.values())
+            
+            if yearly_totals:
+                total_revenue = sum(yearly_totals.values())
+                max_year_revenue = max(yearly_totals.values())
+                max_year_pct = (max_year_revenue / total_revenue * 100) if total_revenue > 0 else 0
+                risk_level = "🔴 High" if max_year_pct > 40 else "🟡 Medium" if max_year_pct > 25 else "🟢 Low"
+                st.metric("Revenue Concentration Risk", f"{max_year_pct:.0f}%", risk_level)
+            else:
+                st.metric("Revenue Concentration Risk", "N/A")
+        
+        with col4:
+            # Portfolio completion status
+            completed_projects = 0
+            for project in portfolio_data.values():
+                yearly_proj = project['data'].get('yearly_revenue_projections', {})
+                if yearly_proj:
+                    max_poc = max((data['poc_percentage'] for data in yearly_proj.values()), default=0)
+                    if max_poc >= 100:
+                        completed_projects += 1
+            
+            st.metric("Projects at Completion", f"{completed_projects}/{len(portfolio_data)}")
+        
+        # Visualizations
+        if portfolio_yearly:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Revenue Pipeline Stacked Area Chart
+                fig_pipeline = create_revenue_pipeline_chart(portfolio_yearly)
+                st.plotly_chart(fig_pipeline, use_container_width=True)
+            
+            with col2:
+                # Project Completion Timeline
+                fig_timeline = create_completion_timeline_chart(portfolio_data)
+                st.plotly_chart(fig_timeline, use_container_width=True)
+            
+            # Revenue Concentration Heatmap
+            st.markdown("### 🔥 Revenue Concentration Heatmap")
+            fig_heatmap = create_revenue_concentration_heatmap(portfolio_data)
+            st.plotly_chart(fig_heatmap, use_container_width=True)
+            
+            if debug_mode:
+                st.markdown("### Debug: Portfolio Yearly Data")
+                st.json(portfolio_yearly)
+    
+    with tab3:
+        # Placeholder for forecast accuracy analysis
+        st.markdown("### 🎯 Revenue Forecast Accuracy Analysis")
+        st.info("📊 Forecast accuracy analysis will be implemented in Phase 3")
+        # This can be implemented later to compare historical RFC vs actuals
 
 def render_executive_project_table(portfolio_data):
     """Render comprehensive executive project summary table"""
@@ -4972,6 +5612,363 @@ def render_financial_performance_analysis(project_data):
     
     df_financial = pd.DataFrame(financial_summary)
     st.dataframe(df_financial, use_container_width=True)
+    
+    # ================================================================================
+    # NEW: Multi-year revenue projection section
+    # ================================================================================
+    with st.expander("📈 Multi-Year Revenue Projection", expanded=False):
+        yearly_projections = project_data.get('yearly_revenue_projections', {})
+    
+    # Add debug mode for revenue projections
+        revenue_debug = st.checkbox("🔍 Show Revenue Projection Debug", value=False, key="revenue_proj_debug")
+
+        if yearly_projections:
+            # Separate Previous Period from fiscal years
+            previous_period_data = None
+            previous_period_key = None
+            fiscal_years = []
+            fiscal_year_keys = {}  # Map string year to original key
+        
+            # Debug: Show what keys we're getting
+            if revenue_debug:
+                st.write("**Yearly Projections Keys:**", list(yearly_projections.keys()))
+    
+            for year, data in yearly_projections.items():
+                year_str = str(year).strip()
+            # Check for "Previous Period" in various forms
+                if 'previous' in year_str.lower() or 'period' in year_str.lower():
+                    previous_period_data = data
+                    previous_period_key = year
+                    if revenue_debug:
+                        st.write(f"Found Previous Period: '{year}'")
+                else:
+                    fiscal_years.append(year_str)
+                    fiscal_year_keys[year_str] = year  # Store mapping
+    
+        # Sort fiscal years
+            fiscal_years.sort(key=str)
+        
+        # Debug output
+            if revenue_debug:
+                st.write("**Parsing Results:**")
+                st.write(f"- Previous Period Data Found: {previous_period_data is not None}")
+                st.write(f"- Fiscal Years Found: {fiscal_years}")
+                if previous_period_data:
+                    st.write(f"- Previous Period Total Revenue: {format_currency_thousands(previous_period_data.get('total_revenue', 0))}")
+    
+        # Prepare data for visualization
+            all_years = []
+            cumulative_revenue = []
+            cumulative_sum = 0
+            poc_values = []
+            yearly_revenues = []
+    
+        # Add Previous Period if exists
+            if previous_period_data:
+                all_years.append('Pre-2024')
+                cumulative_sum = previous_period_data['total_revenue']
+                cumulative_revenue.append(cumulative_sum / 1000000)
+                yearly_revenues.append(previous_period_data['total_revenue'] / 1000000)
+                poc_values.append(previous_period_data['poc_percentage'])
+    
+        # Add fiscal years
+            for year_str in fiscal_years:
+                orig_key = fiscal_year_keys.get(year_str, year_str)
+                year_data = yearly_projections.get(orig_key)
+            
+                if year_data:
+                    yearly_revenue = year_data['total_revenue']
+                    cumulative_sum += yearly_revenue
+            
+                    all_years.append(year_str)
+                    cumulative_revenue.append(cumulative_sum / 1000000)
+                    yearly_revenues.append(yearly_revenue / 1000000)
+                    poc_values.append(year_data['poc_percentage'])
+        
+        # Debug: Verify x-axis data
+            if revenue_debug:
+                st.write("**X-axis years for chart:**", all_years)
+                st.write("**Yearly revenues:**", yearly_revenues)
+                st.write("**Cumulative revenues:**", cumulative_revenue)
+                st.write("**POC values:**", poc_values)
+            
+
+            # IMPORTANT FIX: Create numerical x-axis positions for proper plotting
+            x_positions = list(range(len(all_years)))
+        
+            # Create a comprehensive figure with secondary y-axis
+            fig = go.Figure()
+            
+            fig.add_trace(
+                go.Bar(
+                    x=x_positions,
+                    y=yearly_revenues,  # Keep in millions to match cumulative
+                    name='Yearly Revenue',
+                    marker_color='lightblue',
+                    customdata=all_years,
+                    hovertemplate='Year: %{customdata}<br>Yearly Revenue: CHF %{y:.2f}M<extra></extra>',
+                    yaxis='y',
+                    opacity=0.6,
+                    width=0.5
+                )
+            )
+                                          
+                           
+
+            # Add cumulative revenue line (S-curve)
+            fig.add_trace(
+                go.Scatter(
+                    x=x_positions,
+                    y=cumulative_revenue,
+                    name='Cumulative Revenue',
+                    mode='lines+markers',
+                    line=dict(color='darkblue', width=3),
+                    marker=dict(size=8, color='darkblue'),
+                    customdata=all_years,
+                    hovertemplate='Year: %{customdata}<br>Cumulative: CHF %{y:.1f}M<extra></extra>',
+                    yaxis='y'
+                )
+            )
+        
+            # Add POC progression on secondary y-axis
+            fig.add_trace(
+                go.Scatter(
+                    x=x_positions,
+                    y=poc_values,
+                    name='POC %',
+                    mode='lines+markers',
+                    line=dict(color='red', width=2, dash='dash'),
+                    marker=dict(size=8, color='red'),
+                    customdata=all_years,
+                    hovertemplate='Year: %{customdata}<br>POC: %{y:.1f}%<extra></extra>',
+                    yaxis='y2'
+                )
+            )
+        
+        # Add completion annotation
+            for i, poc in enumerate(poc_values):
+                if poc >= 100:
+                    fig.add_annotation(
+                        x=i,
+                        y=poc,
+                        text="Completion",
+                        showarrow=True,
+                        arrowhead=2,
+                        arrowsize=1,
+                        arrowwidth=2,
+                        arrowcolor="green",
+                        ax=0,
+                        ay=-40,
+                        yref='y2'
+                    )
+                    break
+        
+            # Update layout for dual y-axis
+            fig.update_layout(
+                title='Comprehensive Revenue Analysis',
+                xaxis=dict(
+                    title='Fiscal Year',
+                    tickmode='array',
+                    tickvals=x_positions,
+                    ticktext=all_years,
+                    tickangle=-45,
+                    range=[-0.5, len(all_years) - 0.5]
+                ),
+                yaxis=dict(
+                    title='Revenue (CHF M)',
+                    side='left',
+                    title_font=dict(color='darkblue'),
+                    tickfont=dict(color='darkblue')
+                ),
+                yaxis2=dict(
+                    title='POC %',
+                    overlaying='y',
+                    side='right',
+                    title_font=dict(color='red'),
+                    tickfont=dict(color='red'),
+                    rangemode='tozero',
+                    range=[0, max(poc_values) * 1.1]
+                ),
+                height=500,
+                showlegend=True,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="center",
+                    x=0.5,
+                    bgcolor="rgba(255, 255, 255, 0.8)",
+                    bordercolor="rgba(0, 0, 0, 0.2)",
+                    borderwidth=1
+                ),
+                hovermode='x unified',
+                margin=dict(l=80, r=80, t=100, b=80),
+                plot_bgcolor='rgba(250, 250, 250, 0.5)',
+                bargap=0.15
+            )
+        
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Create a separate figure for yearly revenue bars
+#            fig2 = go.Figure()
+#            yearly_revenues_k = [rev * 1000 for rev in yearly_revenues]  # Convert from M to K 
+#            fig2.add_trace(
+#                go.Bar(
+#                    x=all_years,
+#                    y=yearly_revenues_k,
+#                    name='Yearly Revenue',
+#                    marker_color='lightblue',
+#                    hovertemplate='Year: %{customdata}<br>Revenue: CHF %{y:.1f}M<extra></extra>',
+#                    width=0.5                                                    
+#                )
+#            )
+#        
+#            fig2.update_layout(
+#                title='Year-over-Year Revenue',
+#                xaxis=dict(
+#                    title='Fiscal Year',
+#                    type='category',
+#                    categoryorder='array',
+#                    categoryarray=all_years,
+#                    range=[-0.5, len(all_years) - 0.5]  # Same range as above chart
+#                ),
+#                yaxis=dict(
+#                    title='Revenue (CHF k)',
+#                    tickformat=',.0f'  # Format with comma separator
+#                ),
+#                height=300,
+#                showlegend=False,
+#                margin=dict(l=80, r=80, t=60, b=80)  # Match left/right margins with chart above
+#            )
+#        
+#            st.plotly_chart(fig2, use_container_width=True)
+        
+        # Year-by-year breakdown table
+            st.markdown("### 📊 Year-by-Year Revenue Breakdown")
+        
+            breakdown_data = []
+        
+        # Add Previous Period if exists
+            if previous_period_data:
+                breakdown_data.append({
+                    'Fiscal Year': 'Previous Period',
+                    'Actual + Prior': format_currency_thousands(previous_period_data['actual_prior_fy']),
+                    'RFC': format_currency_thousands(previous_period_data['revenue_rfc']),
+                    'Total Revenue': format_currency_thousands(previous_period_data['total_revenue']),
+                    'POC %': f"{previous_period_data['poc_percentage']:.1f}%",
+                    'YoY Change': 'N/A',
+                    'Status': '🟢 Active'
+                })
+        
+        # Add fiscal years
+            for i, year_str in enumerate(fiscal_years):
+                orig_key = fiscal_year_keys.get(year_str, year_str)
+                year_data = yearly_projections.get(orig_key)
+            
+                if not year_data:
+                    continue
+        
+            # Calculate YoY change
+                if i == 0 and previous_period_data:
+                    prev_revenue = previous_period_data['total_revenue']
+                elif i > 0:
+                # Get previous year's data
+                    prev_year_str = fiscal_years[i-1]
+                    prev_orig_key = fiscal_year_keys.get(prev_year_str, prev_year_str)
+                    prev_year_data = yearly_projections.get(prev_orig_key)
+                    if prev_year_data:
+                        prev_revenue = prev_year_data['total_revenue']
+                    else:
+                        prev_revenue = 0
+                else:
+                    prev_revenue = 0
+            
+                if prev_revenue > 0:
+                    yoy_change = ((year_data['total_revenue'] - prev_revenue) / prev_revenue * 100)
+                    yoy_text = f"{yoy_change:+.1f}%"
+                else:
+                    yoy_text = "N/A"
+        
+            # Determine status
+                if year_data['poc_percentage'] >= 100:
+                    status = "🏁 Complete"
+                elif year_data['actual_prior_fy'] > 0:
+                    status = "🟢 Active"
+                else:
+                    status = "📅 Future"
+        
+                breakdown_data.append({
+                    'Fiscal Year': year_str,
+                    'Actual + Prior': format_currency_thousands(year_data['actual_prior_fy']),
+                    'RFC': format_currency_thousands(year_data['revenue_rfc']),
+                    'Total Revenue': format_currency_thousands(year_data['total_revenue']),
+                    'POC %': f"{year_data['poc_percentage']:.1f}%",
+                    'YoY Change': yoy_text,
+                    'Status': status
+                })
+        
+            df_breakdown = pd.DataFrame(breakdown_data)
+            st.dataframe(df_breakdown, use_container_width=True)
+        
+        # Show revenue metrics
+            revenue_metrics = project_data.get('revenue_metrics', {})
+            if revenue_metrics:
+                st.markdown("### 📊 Revenue Metrics")
+                col1, col2, col3 = st.columns(3)
+            
+                with col1:
+                    st.metric("Completion Year", revenue_metrics.get('completion_year', 'N/A'))
+                    st.metric("Years to Complete", revenue_metrics.get('years_to_complete', 'N/A'))
+            
+                with col2:
+                    burndown = revenue_metrics.get('revenue_burndown_pct', 0)
+                    burndown_icon = "🟢" if burndown < 30 else "🟡" if burndown < 60 else "🔴"
+                    st.metric("Revenue Burndown", f"{burndown:.1f}%", f"{burndown_icon}")
+                
+                    efficiency = revenue_metrics.get('recognition_efficiency', 0)
+                    eff_icon = "🟢" if efficiency >= 95 else "🟡" if efficiency >= 85 else "🔴"
+                    st.metric("Recognition Efficiency", f"{efficiency:.1f}%", f"{eff_icon}")
+            
+                with col3:
+                    st.metric("Total RFC", format_currency_millions(revenue_metrics.get('total_rfc', 0)))
+                    st.metric("Total Recognized", format_currency_millions(revenue_metrics.get('total_recognized', 0)))
+            
+            # Revenue velocity analysis
+                if revenue_metrics.get('revenue_velocity'):
+                    st.markdown("### 📈 Revenue Velocity Analysis")
+                    velocity_data = revenue_metrics['revenue_velocity']
+                
+                    fig_velocity = go.Figure()
+                    fig_velocity.add_trace(go.Bar(
+                        x=[v['year'] for v in velocity_data],
+                        y=[v['velocity'] for v in velocity_data],
+                        marker_color=['green' if v['velocity'] > 0 else 'red' for v in velocity_data],
+                        text=[f"{v['velocity']:+.1f}%" for v in velocity_data],
+                        textposition='outside'
+                    ))
+                
+                    fig_velocity.update_layout(
+                        title='Year-over-Year Revenue Growth Rate',
+                        xaxis_title='Fiscal Year',
+                        yaxis_title='Growth Rate (%)',
+                        height=300
+                    )
+                
+                    st.plotly_chart(fig_velocity, use_container_width=True)
+            
+                # Add debug output
+                if revenue_debug:
+                    st.markdown("### 🔍 Debug Information")
+                    st.write("**Yearly Projections Data:**")
+                    st.json(yearly_projections)
+                    if previous_period_data:
+                        st.write("**Previous Period Data Found:**")
+                        st.json(previous_period_data)
+                    else:
+                        st.warning("No Previous Period data detected!")
+        else:
+            st.info("No multi-year revenue projection data available for this project.")
+
 
 def render_simplified_cost_structure_analysis(project_data):
     """Render simplified cost structure analysis focusing on available data"""
