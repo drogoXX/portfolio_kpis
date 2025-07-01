@@ -5667,8 +5667,8 @@ def render_financial_performance_analysis(project_data):
             if previous_period_data:
                 all_years.append('Pre-2024')
                 cumulative_sum = previous_period_data['total_revenue']
-                cumulative_revenue.append(cumulative_sum / 1000000)
-                yearly_revenues.append(previous_period_data['total_revenue'] / 1000000)
+                cumulative_revenue.append(cumulative_sum / 1000)
+                yearly_revenues.append(previous_period_data['total_revenue'] / 1000)
                 poc_values.append(previous_period_data['poc_percentage'])
     
         # Add fiscal years
@@ -5681,8 +5681,8 @@ def render_financial_performance_analysis(project_data):
                     cumulative_sum += yearly_revenue
             
                     all_years.append(year_str)
-                    cumulative_revenue.append(cumulative_sum / 1000000)
-                    yearly_revenues.append(yearly_revenue / 1000000)
+                    cumulative_revenue.append(cumulative_sum / 1000)
+                    yearly_revenues.append(yearly_revenue / 1000)
                     poc_values.append(year_data['poc_percentage'])
         
         # Debug: Verify x-axis data
